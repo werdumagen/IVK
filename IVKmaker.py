@@ -9,20 +9,19 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QTextEdit, QPushButton, QSplitter, QMessageBox, QGroupBox,
     QTabWidget, QFileDialog, QDoubleSpinBox, QCheckBox, QTableWidget,
-    QTableWidgetItem, QHeaderView
+    QTableWidgetItem, QHeaderView, QGraphicsView, QGraphicsScene,
+    QGraphicsItem, QGraphicsObject
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
+from PyQt6.QtGui import (
+    QPixmap, QImage, QPainter, QPen, QBrush, QFont, QColor,
+    QPainterPath, QRadialGradient
+)
 from PyQt6.QtSvg import QSvgRenderer
 
 from rdkit import Chem
 from rdkit.Chem import rdDepictor
 from rdkit.Chem.Draw import rdMolDraw2D
-
-import matplotlib
-matplotlib.use('QtAgg')
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
-from matplotlib.figure import Figure
 
 COV_RADII = {
     'H': 0.31, 'He': 0.28, 'Li': 1.28, 'Be': 0.96, 'B': 0.84, 'C': 0.76,
@@ -32,12 +31,16 @@ COV_RADII = {
 }
 
 NODE_COLORS = {
-    'CH': '#FFB74D',    # Оранжевый
-    'CH2': '#64B5F6',   # Синий
-    'CH3': '#81C784',   # Зеленый
-    'CH4': '#BA68C8'
+    'CH': '#FFA726',    # Тёплый оранжевый
+    'CH2': '#42A5F5',   # Небесно-синий
+    'CH3': '#66BB6A',   # Пастельно-зеленый
+    'CH4': '#AB47BC'
 }
 
+
+# ==========================================================
+#      ИНТЕРАКТИВНЫЙ 2D РЕНДЕР МОЛЕКУЛЫ (RDKit)
+# ==========================================================
 
 class InteractiveMolLabel(QLabel):
     atomClicked = pyqtSignal(int)
@@ -65,8 +68,193 @@ class InteractiveMolLabel(QLabel):
             self.atomClicked.emit(closest_atom)
 
 
+# ==========================================================
+#     КАСТОМНЫЙ ГРАФОВЫЙ ДВИЖОК (QGraphicsView / QPainter)
+# ==========================================================
+
+class GraphNodeItem(QGraphicsObject):
+    clicked = pyqtSignal(str)
+
+    def __init__(self, node_id: str, data: dict, x: float, y: float):
+        super().__init__()
+        self.node_id = node_id
+        self.data = data
+        self.radius = 32.0  # Радиус сферы
+        self.edges = []
+        self.setPos(x, y)
+
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setAcceptHoverEvents(True)
+        self.is_hovered = False
+
+    def boundingRect(self) -> QRectF:
+        pad = 6.0
+        return QRectF(-self.radius - pad, -self.radius - pad,
+                      (self.radius + pad) * 2, (self.radius + pad) * 2)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(-self.radius, -self.radius, self.radius * 2, self.radius * 2)
+        g_type = self.data.get('type', 'CH')
+        base_color = QColor(NODE_COLORS.get(g_type, '#FFA726'))
+
+        # Градиент сферы для визуального объема
+        grad = QRadialGradient(-8, -8, self.radius * 1.3)
+        grad.setColorAt(0.0, base_color.lighter(130))
+        grad.setColorAt(0.85, base_color)
+        grad.setColorAt(1.0, base_color.darker(125))
+
+        pen_color = QColor('#0D47A1') if self.is_hovered else QColor('#263238')
+        pen_width = 3.0 if self.is_hovered else 2.0
+
+        painter.setPen(QPen(pen_color, pen_width))
+        painter.setBrush(QBrush(grad))
+        painter.drawEllipse(rect)
+
+        # Текст метки узла
+        lbl = self.data.get('label', self.node_id)
+        painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
+        painter.setPen(QPen(QColor('#002171')))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, lbl)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.node_id)
+
+    def hoverEnterEvent(self, event):
+        self.is_hovered = True
+        self.update()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):
+        self.is_hovered = False
+        self.update()
+        super().hoverLeaveEvent(event)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            for edge in self.edges:
+                edge.update_position()
+        return super().itemChange(change, value)
+
+
+class GraphEdgeItem(QGraphicsItem):
+    def __init__(self, u_node: GraphNodeItem, v_node: GraphNodeItem, j_val: Optional[float] = None):
+        super().__init__()
+        self.u = u_node
+        self.v = v_node
+        self.j_val = j_val
+        self.u.edges.append(self)
+        self.v.edges.append(self)
+        self.setZValue(-1.0)  # Рёбра всегда позади сфер
+
+    def boundingRect(self) -> QRectF:
+        p1 = self.u.pos()
+        p2 = self.v.pos()
+        return QRectF(p1, p2).normalized().adjusted(-40, -40, 40, 40)
+
+    def update_position(self):
+        self.prepareGeometryChange()
+        self.update()
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p1 = self.u.pos()
+        p2 = self.v.pos()
+
+        is_weak = (self.j_val is not None and self.j_val < 4.5)
+        if is_weak:
+            pen = QPen(QColor('#78909C'), 1.8, Qt.PenStyle.DashLine)
+        else:
+            pen = QPen(QColor('#37474F'), 2.4, Qt.PenStyle.SolidLine)
+
+        painter.setPen(pen)
+        painter.drawLine(p1, p2)
+
+        # Подпись числового значения J на ребре
+        if self.j_val is not None:
+            mid = (p1 + p2) / 2.0
+            j_str = f"{self.j_val:.1f}"
+            font = QFont("Arial", 8, QFont.Weight.Bold)
+            painter.setFont(font)
+
+            pill_w, pill_h = 28.0, 16.0
+            pill_rect = QRectF(mid.x() - pill_w / 2.0, mid.y() - pill_h / 2.0, pill_w, pill_h)
+
+            painter.setPen(QPen(QColor('#CFD8DC'), 1.0))
+            painter.setBrush(QBrush(QColor(255, 255, 255, 240)))
+            painter.drawRoundedRect(pill_rect, 4.0, 4.0)
+
+            painter.setPen(QPen(QColor('#C62828')))
+            painter.drawText(pill_rect, Qt.AlignmentFlag.AlignCenter, j_str)
+
+
+class InteractiveGraphCanvas(QGraphicsView):
+    nodeClicked = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.scene = QGraphicsScene(self)
+        self.setScene(self.scene)
+
+        self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setStyleSheet("background-color: #FAFAFA; border: 1px solid #ECEFF1; border-radius: 4px;")
+
+    def wheelEvent(self, event):
+        zoom_factor = 1.15
+        if event.angleDelta().y() > 0:
+            self.scale(zoom_factor, zoom_factor)
+        else:
+            self.scale(1.0 / zoom_factor, 1.0 / zoom_factor)
+
+    def set_graph(self, nodes_dict: Dict[str, dict], edges_list: list, has_weights: bool = False):
+        self.scene.clear()
+        if not nodes_dict:
+            return
+
+        node_keys = list(nodes_dict.keys())
+        edge_pairs = [(e[0], e[1]) if has_weights else e for e in edges_list]
+
+        # Расчёт просторного расположения
+        pos = calculate_spring_layout(node_keys, edge_pairs)
+
+        # Масштаб между узлами (узлы далеко друг от друга)
+        dist_scale = 135.0
+        node_items = {}
+
+        for k in node_keys:
+            p = pos.get(k, np.array([0.0, 0.0]))
+            item = GraphNodeItem(k, nodes_dict[k], p[0] * dist_scale, p[1] * dist_scale)
+            item.clicked.connect(self.nodeClicked.emit)
+            self.scene.addItem(item)
+            node_items[k] = item
+
+        for e in edges_list:
+            u_key = e[0]
+            v_key = e[1]
+            j_val = e[2] if has_weights and len(e) >= 3 else None
+            if u_key in node_items and v_key in node_items:
+                edge_item = GraphEdgeItem(node_items[u_key], node_items[v_key], j_val)
+                self.scene.addItem(edge_item)
+
+        # Центрирование вида
+        rect = self.scene.itemsBoundingRect().adjusted(-100, -100, 100, 100)
+        self.scene.setSceneRect(rect)
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+
+# ==========================================================
+#     АЛГОРИТМ РАСПОЛОЖЕНИЯ УЗЛОВ (Fruchterman-Reingold)
+# ==========================================================
+
 def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150) -> Dict[str, np.ndarray]:
-    """Разреженный пружинный лейаут с увеличенными дистанциями отталкивания"""
     n = len(nodes)
     if n == 0:
         return {}
@@ -76,7 +264,7 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
     pos = {}
     for i, node in enumerate(nodes):
         angle = 2.0 * math.pi * i / n
-        pos[node] = np.array([math.cos(angle) * 4.2, math.sin(angle) * 4.2])
+        pos[node] = np.array([math.cos(angle) * 4.5, math.sin(angle) * 4.5])
 
     adj = {u: set() for u in nodes}
     for edge in edges:
@@ -85,15 +273,14 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
             adj[u].add(v)
             adj[v].add(u)
 
-    # Увеличенная константа оптимального расстояния k
-    k = math.sqrt(18.0 / n)
-    t = 2.2
+    k = math.sqrt(20.0 / n)
+    t = 2.4
     dt = t / (iterations + 1)
 
     for _ in range(iterations):
         disp = {node: np.zeros(2) for node in nodes}
 
-        # Сильное отталкивание сфер
+        # Отталкивание сфер (увеличенный радиус)
         for i in range(n):
             u = nodes[i]
             for j in range(i + 1, n):
@@ -107,7 +294,7 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
                 disp[u] += (delta / dist) * rep
                 disp[v] -= (delta / dist) * rep
 
-        # Притяжение по рёбрам
+        # Притяжение по связям
         for u in nodes:
             for v in adj[u]:
                 if u < v:
@@ -119,19 +306,23 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
                     disp[u] -= (delta / dist) * attr
                     disp[v] += (delta / dist) * attr
 
-        # Очень мягкая центральная гравитация (предотвращает схлопывание)
+        # Очень слабая гравитация к центру
         for node in nodes:
-            disp[node] -= 0.04 * pos[node]
+            disp[node] -= 0.03 * pos[node]
             d_norm = np.linalg.norm(disp[node])
             if d_norm > 1e-4:
                 step = min(d_norm, t)
                 pos[node] += (disp[node] / d_norm) * step
-                pos[node] = np.clip(pos[node], -7.0, 7.0)
+                pos[node] = np.clip(pos[node], -7.5, 7.5)
 
         t -= dt
 
     return pos
 
+
+# ==========================================================
+#                  ПАРСЕРЫ ДАННЫХ
+# ==========================================================
 
 class DataParsers:
     @staticmethod
@@ -279,7 +470,7 @@ class DataParsers:
         j_tol: float = 0.35,
         ignore_artifacts: bool = True
     ) -> Tuple[Dict[str, dict], List[Tuple[str, str, float]]]:
-        # 1. Считывание мультиплетов и констант J
+        # 1. 1D мультиплеты и константы J
         peaks_1d = []
         item_re = re.compile(
             r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*'
@@ -303,7 +494,7 @@ class DataParsers:
                 'integ': integ
             })
 
-        # 2. HSQC: считывание пиков с точным знаком фазы
+        # 2. HSQC фазочувствительный парсинг
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip()
@@ -366,7 +557,7 @@ class DataParsers:
         exp_nodes = {}
         node_idx = 0
 
-        # Узлы CH2
+        # CH2 узлы (ровно 7 штук)
         for cl in ch2_clusters:
             node_id = f"EXP_{node_idx}"
             node_idx += 1
@@ -390,7 +581,7 @@ class DataParsers:
                 'label': lbl
             }
 
-        # Узлы CH и CH3
+        # CH и CH3 узлы (11 CH + 1 CH3)
         for p in pos_peaks:
             node_id = f"EXP_{node_idx}"
             node_idx += 1
@@ -462,7 +653,7 @@ class DataParsers:
                         best_k = k
             return best_k
 
-        # 5. J-Matching и сборка рёбер
+        # 5. J-Matching + валидация связей
         edges_dict = {}
         node_keys = list(exp_nodes.keys())
 
@@ -511,106 +702,15 @@ class DataParsers:
         return exp_nodes, final_edges
 
 
-class GraphCanvasWidget(QWidget):
-    nodeClicked = pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.figure = Figure(figsize=(8, 6), facecolor='#FAFAFA')
-        self.canvas = FigureCanvasQTAgg(self.figure)
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        self.layout.addWidget(self.toolbar)
-        self.layout.addWidget(self.canvas)
-
-        self.current_pos = {}
-        self.current_nodes = {}
-        self.canvas.mpl_connect('button_press_event', self._on_canvas_click)
-
-    def _on_canvas_click(self, event):
-        """Интерактивный клик по кружку на холсте Matplotlib"""
-        if event.inaxes is None or event.xdata is None or event.ydata is None:
-            return
-
-        cx, cy = event.xdata, event.ydata
-        closest_node, min_dist = None, 0.75  # Радиус чувствительности в координатах графика
-
-        for node_id, p in self.current_pos.items():
-            dist = math.hypot(cx - p[0], cy - p[1])
-            if dist < min_dist:
-                min_dist = dist
-                closest_node = node_id
-
-        if closest_node:
-            self.nodeClicked.emit(closest_node)
-
-    def draw_single_graph(self, nodes: Dict[str, dict], edges: list, title: str, has_weights: bool = False):
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
-        ax.set_facecolor('#FFFFFF')
-        self._plot_graph_on_ax(ax, nodes, edges, title, has_weights)
-        self.figure.tight_layout()
-        self.canvas.draw()
-
-    def _plot_graph_on_ax(self, ax, nodes: Dict[str, dict], edges: list, title: str, has_weights: bool = False):
-        ax.set_title(title, fontsize=11, fontweight='bold', pad=12, color='#263238')
-        ax.axis('off')
-
-        if not nodes:
-            ax.text(0.5, 0.5, "Нет данных для отображения", ha='center', va='center', color='#9E9E9E')
-            self.current_pos.clear()
-            self.current_nodes.clear()
-            return
-
-        node_keys = list(nodes.keys())
-        edge_pairs = [(e[0], e[1]) if has_weights else e for e in edges]
-        pos = calculate_spring_layout(node_keys, edge_pairs)
-
-        self.current_pos = pos
-        self.current_nodes = nodes
-
-        # Отрисовка рёбер с подписью констант J
-        if has_weights:
-            for u, v, j_val in edges:
-                if u in pos and v in pos:
-                    p1, p2 = pos[u], pos[v]
-                    if j_val >= 4.5:
-                        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color='#37474F', lw=2.2, zorder=1)
-                    else:
-                        ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color='#78909C', lw=1.3, ls='--', zorder=1)
-
-                    mid_x = (p1[0] + p2[0]) / 2.0
-                    mid_y = (p1[1] + p2[1]) / 2.0
-                    ax.text(mid_x, mid_y, f"{j_val:.1f}", fontsize=7.0, color='#D32F2F', fontweight='bold',
-                            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85), zorder=2)
-        else:
-            for u, v in edges:
-                if u in pos and v in pos:
-                    p1, p2 = pos[u], pos[v]
-                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color='#455A64', lw=2.0, zorder=1)
-
-        # Отрисовка узлов (сфер)
-        for k, p in pos.items():
-            g_type = nodes[k].get('type', 'CH')
-            c_color = NODE_COLORS.get(g_type, '#FFB74D')
-            ax.scatter(p[0], p[1], s=950, color=c_color, edgecolors='#263238', linewidths=1.6, zorder=3)
-            lbl = nodes[k].get('label', k)
-            ax.text(p[0], p[1], lbl, ha='center', va='center', fontsize=7.2, fontweight='bold', color='#0D47A1', zorder=4)
-
-        xs = [p[0] for p in pos.values()]
-        ys = [p[1] for p in pos.values()]
-        pad = 1.0
-        ax.set_xlim(min(xs) - pad, max(xs) + pad)
-        ax.set_ylim(min(ys) - pad, max(ys) + pad)
-        ax.set_aspect('equal')
-
+# ==========================================================
+#                   ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ
+# ==========================================================
 
 class GraphVisualizerApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NMR Multi-Graph Visualizer (Interactive Topology)")
-        self.resize(1680, 1020)
+        self.setWindowTitle("NMR Multi-Graph Visualizer (Clean Vector Canvas)")
+        self.resize(1700, 1020)
         self.mol = None
         self.last_graphs = {}
         self._init_ui()
@@ -686,7 +786,7 @@ class GraphVisualizerApp(QMainWindow):
 
         t3_l.addWidget(filter_box)
 
-        t3_l.addWidget(QLabel("1D 1H NMR (Отчет / Мультиплеты с J):"))
+        t3_l.addWidget(QLabel("1D 1H NMR (Мультиплеты с J):"))
         self.txt_1d = QTextEdit()
         self.txt_1d.setMaximumHeight(65)
         t3_l.addWidget(self.txt_1d)
@@ -722,28 +822,29 @@ class GraphVisualizerApp(QMainWindow):
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Блок 2D структуры (увеличен)
-        struct_group = QGroupBox("2D Структура молекулы (Клик по атому на графе подсветит его и протоны)")
+        # Блок 2D структуры молекулы (увеличенный размер)
+        struct_group = QGroupBox("2D Структура молекулы (Клик по узлу графа подсветит углерод и все его водороды)")
         struct_l = QVBoxLayout(struct_group)
-        self.mol_view = InteractiveMolLabel("Молекула отрисуется после загрузки координат XYZ")
+        self.mol_view = InteractiveMolLabel("Молекула отрисуется после ввода координат XYZ")
         self.mol_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mol_view.setStyleSheet("background-color: white; border: 1px solid #ccc;")
-        self.mol_view.setMinimumHeight(350)
+        self.mol_view.setStyleSheet("background-color: white; border: 1px solid #ECEFF1; border-radius: 4px;")
+        self.mol_view.setMinimumHeight(380)
         self.mol_view.atomClicked.connect(self.on_mol_atom_clicked)
         struct_l.addWidget(self.mol_view)
         right_splitter.addWidget(struct_group)
 
-        # Индивидуальные вкладки графов
+        # Вкладки интерактивных графов (без вкладки 'Все рядом')
         self.view_tabs = QTabWidget()
-        self.canvas_xyz = GraphCanvasWidget()
+
+        self.canvas_xyz = InteractiveGraphCanvas()
         self.canvas_xyz.nodeClicked.connect(self.on_graph_node_clicked)
         self.view_tabs.addTab(self.canvas_xyz, "1. Структура (XYZ)")
 
-        self.canvas_dft = GraphCanvasWidget()
+        self.canvas_dft = InteractiveGraphCanvas()
         self.canvas_dft.nodeClicked.connect(self.on_graph_node_clicked)
         self.view_tabs.addTab(self.canvas_dft, "2. DFT")
 
-        self.canvas_exp = GraphCanvasWidget()
+        self.canvas_exp = InteractiveGraphCanvas()
         self.canvas_exp.nodeClicked.connect(self.on_graph_node_clicked)
         self.view_tabs.addTab(self.canvas_exp, "3. Эксперимент (J-Matching)")
 
@@ -759,7 +860,7 @@ class GraphVisualizerApp(QMainWindow):
         r_layout.addWidget(right_splitter)
         main_splitter.addWidget(right_w)
 
-        main_splitter.setSizes([500, 1180])
+        main_splitter.setSizes([480, 1200])
         layout.addWidget(main_splitter)
         self.setCentralWidget(main_w)
 
@@ -768,21 +869,20 @@ class GraphVisualizerApp(QMainWindow):
             self.mol_view.setText("Координаты XYZ не заданы.")
             return
 
-        w, h = 750, 350
+        w, h = 800, 380
         try:
             d2d = rdMolDraw2D.MolDraw2DCairo(w, h)
             opts = d2d.drawOptions()
             opts.addAtomIndices = True
-            opts.highlightBondWidthMultiplier = 3
+            opts.highlightBondWidthMultiplier = 3.5
 
             if highlights:
-                colors = {idx: (1.0, 0.45, 0.0) for idx in highlights}
+                colors = {idx: (1.0, 0.40, 0.0) for idx in highlights}
                 d2d.DrawMolecule(self.mol, highlightAtoms=highlights, highlightAtomColors=colors)
             else:
                 d2d.DrawMolecule(self.mol)
 
             d2d.FinishDrawing()
-
             pix = QPixmap()
             pix.loadFromData(d2d.GetDrawingText())
             self.mol_view.setPixmap(pix)
@@ -798,7 +898,7 @@ class GraphVisualizerApp(QMainWindow):
                 d2d_svg = rdMolDraw2D.MolDraw2DSVG(w, h)
                 d2d_svg.drawOptions().addAtomIndices = True
                 if highlights:
-                    colors = {idx: (1.0, 0.45, 0.0) for idx in highlights}
+                    colors = {idx: (1.0, 0.40, 0.0) for idx in highlights}
                     d2d_svg.DrawMolecule(self.mol, highlightAtoms=highlights, highlightAtomColors=colors)
                 else:
                     d2d_svg.DrawMolecule(self.mol)
@@ -817,7 +917,7 @@ class GraphVisualizerApp(QMainWindow):
                 self.mol_view.setText(f"Ошибка отрисовки: {e}")
 
     def on_graph_node_clicked(self, node_id: str):
-        """Подсветка атома и его водородов при клике по узлу на любом графе"""
+        """Интерактивный клик по узлу на графе -> подсветка углерода и всех его водородов на молекуле"""
         if not self.mol:
             return
 
@@ -833,7 +933,7 @@ class GraphVisualizerApp(QMainWindow):
             self._render_mol(highlights=[c_idx] + h_indices)
 
     def on_mol_atom_clicked(self, atom_idx: int):
-        """Подсветка при прямом клике на 2D-рисунок"""
+        """Интерактивный клик по атому на 2D молекуле -> подсветка группы"""
         if not self.mol or atom_idx >= self.mol.GetNumAtoms():
             return
         atom = self.mol.GetAtomWithIdx(atom_idx)
@@ -870,13 +970,13 @@ class GraphVisualizerApp(QMainWindow):
             if xyz_t:
                 self.mol, xyz_nodes, xyz_edges = DataParsers.parse_xyz(xyz_t)
                 self._render_mol()
-                self.canvas_xyz.draw_single_graph(xyz_nodes, xyz_edges, f"Структура XYZ ({len(xyz_nodes)} узлов, {len(xyz_edges)} связей)", has_weights=False)
+                self.canvas_xyz.set_graph(xyz_nodes, xyz_edges, has_weights=False)
 
             # 2. DFT спиновый граф
             dft_nodes, dft_edges = {}, []
             if dft_t:
                 dft_nodes, dft_edges = DataParsers.parse_dft(dft_t)
-                self.canvas_dft.draw_single_graph(dft_nodes, dft_edges, f"DFT ({len(dft_nodes)} узлов, {len(dft_edges)} J-связей)", has_weights=True)
+                self.canvas_dft.set_graph(dft_nodes, dft_edges, has_weights=True)
 
             # 3. Эксперимент с J-Matching
             exp_nodes, exp_edges = DataParsers.parse_exp(
@@ -886,10 +986,10 @@ class GraphVisualizerApp(QMainWindow):
                 j_tol=self.spin_jtol.value(),
                 ignore_artifacts=self.chk_artifacts.isChecked()
             )
-            self.canvas_exp.draw_single_graph(exp_nodes, exp_edges, f"Эксперимент: 1D J-Match + COSY ({len(exp_nodes)} узлов, {len(exp_edges)} связей)", has_weights=True)
+            self.canvas_exp.set_graph(exp_nodes, exp_edges, has_weights=True)
             self._populate_table(exp_nodes)
 
-            # 4. Экспорт структуры графов
+            # 4. Сохранение структуры графов для экспорта в JSON
             self.last_graphs = {
                 "xyz_graph": {"nodes": xyz_nodes, "edges": [list(e) for e in xyz_edges]},
                 "dft_graph": {"nodes": dft_nodes, "edges": [list(e) for e in dft_edges]},
@@ -947,11 +1047,11 @@ class GraphVisualizerApp(QMainWindow):
             QMessageBox.warning(self, "Внимание", "Сначала постройте графы кнопкой 'Построить графы с J-Matching'.")
             return
 
-        path, _ = QFileDialog.getSaveFileName(self, "Экспорт графов для ИИ", "graphs_export_jmatched.json", "JSON Files (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "Экспорт графов для ИИ", "graphs_export_clean.json", "JSON Files (*.json)")
         if path:
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(self.last_graphs, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "Успех", f"Графы с J-константами экспортированы в {path}")
+            QMessageBox.information(self, "Успех", f"Очищенные графы экспортированы в {path}")
 
 
 if __name__ == "__main__":
