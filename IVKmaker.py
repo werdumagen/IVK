@@ -12,10 +12,10 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QGraphicsView, QGraphicsScene,
     QGraphicsItem, QGraphicsObject
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QBrush, QFont, QColor,
-    QPainterPath, QRadialGradient
+    QRadialGradient
 )
 from PyQt6.QtSvg import QSvgRenderer
 
@@ -79,7 +79,7 @@ class GraphNodeItem(QGraphicsObject):
         super().__init__()
         self.node_id = node_id
         self.data = data
-        self.radius = 32.0  # Радиус сферы
+        self.radius = 32.0
         self.edges = []
         self.setPos(x, y)
 
@@ -100,7 +100,6 @@ class GraphNodeItem(QGraphicsObject):
         g_type = self.data.get('type', 'CH')
         base_color = QColor(NODE_COLORS.get(g_type, '#FFA726'))
 
-        # Градиент сферы для визуального объема
         grad = QRadialGradient(-8, -8, self.radius * 1.3)
         grad.setColorAt(0.0, base_color.lighter(130))
         grad.setColorAt(0.85, base_color)
@@ -113,7 +112,6 @@ class GraphNodeItem(QGraphicsObject):
         painter.setBrush(QBrush(grad))
         painter.drawEllipse(rect)
 
-        # Текст метки узла
         lbl = self.data.get('label', self.node_id)
         painter.setFont(QFont("Arial", 8, QFont.Weight.Bold))
         painter.setPen(QPen(QColor('#002171')))
@@ -149,7 +147,7 @@ class GraphEdgeItem(QGraphicsItem):
         self.j_val = j_val
         self.u.edges.append(self)
         self.v.edges.append(self)
-        self.setZValue(-1.0)  # Рёбра всегда позади сфер
+        self.setZValue(-1.0)
 
     def boundingRect(self) -> QRectF:
         p1 = self.u.pos()
@@ -174,14 +172,13 @@ class GraphEdgeItem(QGraphicsItem):
         painter.setPen(pen)
         painter.drawLine(p1, p2)
 
-        # Подпись числового значения J на ребре
         if self.j_val is not None:
             mid = (p1 + p2) / 2.0
             j_str = f"{self.j_val:.1f}"
             font = QFont("Arial", 8, QFont.Weight.Bold)
             painter.setFont(font)
 
-            pill_w, pill_h = 28.0, 16.0
+            pill_w, pill_h = 30.0, 16.0
             pill_rect = QRectF(mid.x() - pill_w / 2.0, mid.y() - pill_h / 2.0, pill_w, pill_h)
 
             painter.setPen(QPen(QColor('#CFD8DC'), 1.0))
@@ -222,11 +219,9 @@ class InteractiveGraphCanvas(QGraphicsView):
         node_keys = list(nodes_dict.keys())
         edge_pairs = [(e[0], e[1]) if has_weights else e for e in edges_list]
 
-        # Расчёт просторного расположения
         pos = calculate_spring_layout(node_keys, edge_pairs)
 
-        # Масштаб между узлами (узлы далеко друг от друга)
-        dist_scale = 135.0
+        dist_scale = 145.0
         node_items = {}
 
         for k in node_keys:
@@ -244,8 +239,7 @@ class InteractiveGraphCanvas(QGraphicsView):
                 edge_item = GraphEdgeItem(node_items[u_key], node_items[v_key], j_val)
                 self.scene.addItem(edge_item)
 
-        # Центрирование вида
-        rect = self.scene.itemsBoundingRect().adjusted(-100, -100, 100, 100)
+        rect = self.scene.itemsBoundingRect().adjusted(-120, -120, 120, 120)
         self.scene.setSceneRect(rect)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -273,14 +267,13 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
             adj[u].add(v)
             adj[v].add(u)
 
-    k = math.sqrt(20.0 / n)
-    t = 2.4
+    k = math.sqrt(22.0 / n)
+    t = 2.5
     dt = t / (iterations + 1)
 
     for _ in range(iterations):
         disp = {node: np.zeros(2) for node in nodes}
 
-        # Отталкивание сфер (увеличенный радиус)
         for i in range(n):
             u = nodes[i]
             for j in range(i + 1, n):
@@ -294,7 +287,6 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
                 disp[u] += (delta / dist) * rep
                 disp[v] -= (delta / dist) * rep
 
-        # Притяжение по связям
         for u in nodes:
             for v in adj[u]:
                 if u < v:
@@ -306,14 +298,13 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
                     disp[u] -= (delta / dist) * attr
                     disp[v] += (delta / dist) * attr
 
-        # Очень слабая гравитация к центру
         for node in nodes:
             disp[node] -= 0.03 * pos[node]
             d_norm = np.linalg.norm(disp[node])
             if d_norm > 1e-4:
                 step = min(d_norm, t)
                 pos[node] += (disp[node] / d_norm) * step
-                pos[node] = np.clip(pos[node], -7.5, 7.5)
+                pos[node] = np.clip(pos[node], -8.0, 8.0)
 
         t -= dt
 
@@ -382,7 +373,7 @@ class DataParsers:
         c_indices = [int(k.split('_')[1]) for k in rd_nodes.keys()]
         edges = []
 
-        # Строгая топология d=1 + d=2 строго в 6-членном бензольном кольце (C0 - C2)
+        # d=1 (вицинальные) + d=2 строго в 6-членном бензольном кольце (C0 - C2)
         for i in range(len(c_indices)):
             for j in range(i + 1, len(c_indices)):
                 c1, c2 = c_indices[i], c_indices[j]
@@ -470,7 +461,12 @@ class DataParsers:
         j_tol: float = 0.35,
         ignore_artifacts: bool = True
     ) -> Tuple[Dict[str, dict], List[Tuple[str, str, float]]]:
-        # 1. 1D мультиплеты и константы J
+        """
+        Строгий парсер эксперимента:
+        Edge = (COSY cross-peak >= min_area) AND (J-Match in 1D или подтвержденный мультиплет 'm')
+        Синглет ('s') блокирует любые связи (степень вершины = 0).
+        """
+        # 1. Парсинг 1D мультиплетов и констант J
         peaks_1d = []
         item_re = re.compile(
             r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*'
@@ -491,10 +487,12 @@ class DataParsers:
                 'shift': (s1 + s2) / 2.0,
                 'mult': mult,
                 'j_vals': j_vals,
+                'is_singlet': (mult == 's'),
+                'is_multiplet': (mult == 'm'),
                 'integ': integ
             })
 
-        # 2. HSQC фазочувствительный парсинг
+        # 2. HSQC: считывание пиков с фазочувствительным разделением
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip()
@@ -528,7 +526,7 @@ class DataParsers:
                 except (ValueError, IndexError):
                     pass
 
-        # 3. Схлопывание диастереотопных пар CH2
+        # 3. Схлопывание диастереотопных пар CH2 (ровно 7 CH2 групп)
         neg_peaks = [p for p in hsqc_raw if p['is_neg']]
         pos_peaks = [p for p in hsqc_raw if not p['is_neg']]
 
@@ -557,7 +555,7 @@ class DataParsers:
         exp_nodes = {}
         node_idx = 0
 
-        # CH2 узлы (ровно 7 штук)
+        # Сборка узлов CH2
         for cl in ch2_clusters:
             node_id = f"EXP_{node_idx}"
             node_idx += 1
@@ -565,10 +563,17 @@ class DataParsers:
             h_list = sorted([p['h'] for p in cl], reverse=True)
 
             node_j = []
+            is_singlet = False
+            is_multiplet = False
+
             for h in h_list:
                 for p1d in peaks_1d:
                     if abs(p1d['shift'] - h) < 0.08:
                         node_j.extend(p1d['j_vals'])
+                        if p1d['is_singlet']:
+                            is_singlet = True
+                        if p1d['is_multiplet']:
+                            is_multiplet = True
 
             lbl = f"{h_list[0]:.2f}, {h_list[1]:.2f}\n{c_mean:.1f} (CH2)" if len(h_list) == 2 else f"{h_list[0]:.2f}\n{c_mean:.1f} (CH2)"
 
@@ -576,12 +581,14 @@ class DataParsers:
                 'c': round(c_mean, 2),
                 'h_list': h_list,
                 'j_vals': sorted(list(set(node_j)), reverse=True),
+                'is_singlet': is_singlet,
+                'is_multiplet': is_multiplet,
                 'type': 'CH2',
                 'h_count': 2,
                 'label': lbl
             }
 
-        # CH и CH3 узлы (11 CH + 1 CH3)
+        # Сборка узлов CH и CH3 (11 CH + 1 CH3)
         for p in pos_peaks:
             node_id = f"EXP_{node_idx}"
             node_idx += 1
@@ -592,16 +599,21 @@ class DataParsers:
 
             node_j = []
             is_singlet = False
+            is_multiplet = False
+
             for p1d in peaks_1d:
                 if abs(p1d['shift'] - h_val) < 0.08:
                     node_j.extend(p1d['j_vals'])
-                    if p1d['mult'] == 's':
+                    if p1d['is_singlet']:
                         is_singlet = True
+                    if p1d['is_multiplet']:
+                        is_multiplet = True
 
             if is_methoxyl:
                 g_type = "CH3"
                 h_count = 3
                 lbl = f"{h_val:.2f} (3H)\n{c_val:.1f} (CH3)"
+                is_singlet = True  # OCH3 строго синглет
             else:
                 g_type = "CH"
                 h_count = 1
@@ -612,12 +624,13 @@ class DataParsers:
                 'h_list': [h_val],
                 'j_vals': sorted(list(set(node_j)), reverse=True),
                 'is_singlet': is_singlet,
+                'is_multiplet': is_multiplet,
                 'type': g_type,
                 'h_count': h_count,
                 'label': lbl
             }
 
-        # 4. COSY кросс-пики
+        # 4. COSY кросс-пики с фильтрацией диагонали и воды
         cosy_pairs = []
         for line in cosy_text.splitlines():
             line_str = line.strip()
@@ -639,7 +652,7 @@ class DataParsers:
                     if abs(f1 - 3.33) < 0.08 or abs(f2 - 3.33) < 0.08:
                         continue
                     if abs(area) >= cosy_min_area:
-                        cosy_pairs.append((f1, f2))
+                        cosy_pairs.append((f1, f2, abs(area)))
                 except (ValueError, IndexError):
                     pass
 
@@ -653,7 +666,7 @@ class DataParsers:
                         best_k = k
             return best_k
 
-        # 5. J-Matching + валидация связей
+        # 5. Строгое логическое правило (COSY AND 1D J-Match)
         edges_dict = {}
         node_keys = list(exp_nodes.keys())
 
@@ -661,42 +674,54 @@ class DataParsers:
             for j in range(i + 1, len(node_keys)):
                 u, v = node_keys[i], node_keys[j]
 
+                # ПРАВИЛО 1: Синглет — абсолютный запрет на любые связи
                 if exp_nodes[u].get('is_singlet') or exp_nodes[v].get('is_singlet'):
                     continue
 
-                u_j = exp_nodes[u]['j_vals']
-                v_j = exp_nodes[v]['j_vals']
+                # ПРАВИЛО 2: Проверка наличия кросс-пика в COSY
+                has_cosy = False
+                for f1, f2, area in cosy_pairs:
+                    if (match_shift_to_node(f1) == u and match_shift_to_node(f2) == v) or \
+                       (match_shift_to_node(f1) == v and match_shift_to_node(f2) == u):
+                        has_cosy = True
+                        break
+
+                # Если связи в COSY нет — СВЯЗИ НЕТ (убивает ложную 1.6 Гц клику)
+                if not has_cosy:
+                    continue
+
+                # ПРАВИЛО 3: Сверка констант 1D
+                u_j = exp_nodes[u].get('j_vals', [])
+                v_j = exp_nodes[v].get('j_vals', [])
+                u_is_m = exp_nodes[u].get('is_multiplet', False)
+                v_is_m = exp_nodes[v].get('is_multiplet', False)
 
                 shared_j = None
                 min_diff = j_tol
-                for ju in u_j:
-                    for jv in v_j:
-                        diff = abs(ju - jv)
-                        if diff <= min_diff:
-                            min_diff = diff
-                            shared_j = round((ju + jv) / 2.0, 1)
 
-                if shared_j is not None:
-                    has_cosy = False
-                    for f1, f2 in cosy_pairs:
-                        if (match_shift_to_node(f1) == u and match_shift_to_node(f2) == v) or \
-                           (match_shift_to_node(f1) == v and match_shift_to_node(f2) == u):
-                            has_cosy = True
-                            break
+                # Если у обоих узлов есть оцифрованные J — они ОБЯЗАНЫ численно совпасть
+                if u_j and v_j:
+                    for ju in u_j:
+                        for jv in v_j:
+                            diff = abs(ju - jv)
+                            if diff <= min_diff:
+                                min_diff = diff
+                                shared_j = round((ju + jv) / 2.0, 1)
 
-                    pair = tuple(sorted((u, v)))
-                    if has_cosy or shared_j in [1.6, 9.2, 8.8, 6.9]:
-                        edges_dict[pair] = shared_j
+                    if shared_j is not None:
+                        edges_dict[(u, v)] = shared_j
+                    else:
+                        # В COSY пятно есть, а константы не совпали -> СВЯЗЬ ОТСУТСТВУЕТ
+                        continue
 
-        for f1, f2 in cosy_pairs:
-            u = match_shift_to_node(f1)
-            v = match_shift_to_node(f2)
-            if u and v and u != v:
-                if exp_nodes[u].get('is_singlet') or exp_nodes[v].get('is_singlet'):
-                    continue
-                pair = tuple(sorted((u, v)))
-                if pair not in edges_dict:
-                    edges_dict[pair] = 7.0
+                # Если один из узлов — сложный мультиплет 'm' (где J не оцифрована, но физически есть)
+                elif u_is_m and v_j:
+                    edges_dict[(u, v)] = min(v_j) if min(v_j) < 10.0 else max(v_j)
+                elif v_is_m and u_j:
+                    edges_dict[(u, v)] = min(u_j) if min(u_j) < 10.0 else max(u_j)
+                elif u_is_m and v_is_m:
+                    # Оба узла мультиплеты с сильным COSY
+                    edges_dict[(u, v)] = 7.0
 
         final_edges = [(u, v, j_val) for (u, v), j_val in edges_dict.items()]
         return exp_nodes, final_edges
@@ -709,7 +734,7 @@ class DataParsers:
 class GraphVisualizerApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NMR Multi-Graph Visualizer (Clean Vector Canvas)")
+        self.setWindowTitle("NMR Multi-Graph Visualizer (Strict 1D J-Axiom Engine)")
         self.resize(1700, 1020)
         self.mol = None
         self.last_graphs = {}
@@ -803,7 +828,7 @@ class GraphVisualizerApp(QMainWindow):
         self.input_tabs.setCurrentIndex(2)
         l_layout.addWidget(self.input_tabs)
 
-        self.btn_plot = QPushButton("⚡ Построить графы с J-Matching")
+        self.btn_plot = QPushButton("⚡ Построить графы (COSY ∧ 1D J-Axiom)")
         self.btn_plot.setStyleSheet("background-color: #0288D1; color: white; font-weight: bold; padding: 11px;")
         self.btn_plot.clicked.connect(self.plot_all)
         l_layout.addWidget(self.btn_plot)
@@ -822,7 +847,7 @@ class GraphVisualizerApp(QMainWindow):
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        # Блок 2D структуры молекулы (увеличенный размер)
+        # 2D Структура молекулы
         struct_group = QGroupBox("2D Структура молекулы (Клик по узлу графа подсветит углерод и все его водороды)")
         struct_l = QVBoxLayout(struct_group)
         self.mol_view = InteractiveMolLabel("Молекула отрисуется после ввода координат XYZ")
@@ -833,7 +858,7 @@ class GraphVisualizerApp(QMainWindow):
         struct_l.addWidget(self.mol_view)
         right_splitter.addWidget(struct_group)
 
-        # Вкладки интерактивных графов (без вкладки 'Все рядом')
+        # Вкладки интерактивных графов
         self.view_tabs = QTabWidget()
 
         self.canvas_xyz = InteractiveGraphCanvas()
@@ -978,7 +1003,7 @@ class GraphVisualizerApp(QMainWindow):
                 dft_nodes, dft_edges = DataParsers.parse_dft(dft_t)
                 self.canvas_dft.set_graph(dft_nodes, dft_edges, has_weights=True)
 
-            # 3. Эксперимент с J-Matching
+            # 3. Эксперимент с жестким правилом J-Matching
             exp_nodes, exp_edges = DataParsers.parse_exp(
                 exp1d_t, hsqc_t, cosy_t,
                 c_tol=self.spin_ctol.value(),
@@ -989,7 +1014,7 @@ class GraphVisualizerApp(QMainWindow):
             self.canvas_exp.set_graph(exp_nodes, exp_edges, has_weights=True)
             self._populate_table(exp_nodes)
 
-            # 4. Сохранение структуры графов для экспорта в JSON
+            # 4. Экспорт структуры графов
             self.last_graphs = {
                 "xyz_graph": {"nodes": xyz_nodes, "edges": [list(e) for e in xyz_edges]},
                 "dft_graph": {"nodes": dft_nodes, "edges": [list(e) for e in dft_edges]},
@@ -1044,7 +1069,7 @@ class GraphVisualizerApp(QMainWindow):
 
     def export_graphs(self):
         if not self.last_graphs:
-            QMessageBox.warning(self, "Внимание", "Сначала постройте графы кнопкой 'Построить графы с J-Matching'.")
+            QMessageBox.warning(self, "Внимание", "Сначала постройте графы кнопкой 'Построить графы'.")
             return
 
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт графов для ИИ", "graphs_export_clean.json", "JSON Files (*.json)")
