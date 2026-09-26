@@ -53,7 +53,7 @@ class InteractiveMolLabel(QLabel):
         cx, cy = click_pos.x(), click_pos.y()
 
         closest_atom = -1
-        min_dist = 500
+        min_dist = 600
 
         for idx, (ax, ay) in self.atom_coords.items():
             dist = (cx - ax) ** 2 + (cy - ay) ** 2
@@ -65,7 +65,8 @@ class InteractiveMolLabel(QLabel):
             self.atomClicked.emit(closest_atom)
 
 
-def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 140) -> Dict[str, np.ndarray]:
+def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150) -> Dict[str, np.ndarray]:
+    """Разреженный пружинный лейаут с увеличенными дистанциями отталкивания"""
     n = len(nodes)
     if n == 0:
         return {}
@@ -75,7 +76,7 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 140
     pos = {}
     for i, node in enumerate(nodes):
         angle = 2.0 * math.pi * i / n
-        pos[node] = np.array([math.cos(angle) * 2.2, math.sin(angle) * 2.2])
+        pos[node] = np.array([math.cos(angle) * 4.2, math.sin(angle) * 4.2])
 
     adj = {u: set() for u in nodes}
     for edge in edges:
@@ -84,13 +85,15 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 140
             adj[u].add(v)
             adj[v].add(u)
 
-    k = math.sqrt(5.0 / n)
-    t = 1.5
+    # Увеличенная константа оптимального расстояния k
+    k = math.sqrt(18.0 / n)
+    t = 2.2
     dt = t / (iterations + 1)
 
     for _ in range(iterations):
         disp = {node: np.zeros(2) for node in nodes}
 
+        # Сильное отталкивание сфер
         for i in range(n):
             u = nodes[i]
             for j in range(i + 1, n):
@@ -98,12 +101,13 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 140
                 delta = pos[u] - pos[v]
                 dist = np.linalg.norm(delta)
                 if dist < 1e-4:
-                    delta = np.array([0.02, 0.02])
-                    dist = 0.028
+                    delta = np.array([0.03, 0.03])
+                    dist = 0.042
                 rep = (k * k) / dist
                 disp[u] += (delta / dist) * rep
                 disp[v] -= (delta / dist) * rep
 
+        # Притяжение по рёбрам
         for u in nodes:
             for v in adj[u]:
                 if u < v:
@@ -115,13 +119,14 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 140
                     disp[u] -= (delta / dist) * attr
                     disp[v] += (delta / dist) * attr
 
+        # Очень мягкая центральная гравитация (предотвращает схлопывание)
         for node in nodes:
-            disp[node] -= 0.12 * pos[node]
+            disp[node] -= 0.04 * pos[node]
             d_norm = np.linalg.norm(disp[node])
             if d_norm > 1e-4:
                 step = min(d_norm, t)
                 pos[node] += (disp[node] / d_norm) * step
-                pos[node] = np.clip(pos[node], -3.8, 3.8)
+                pos[node] = np.clip(pos[node], -7.0, 7.0)
 
         t -= dt
 
@@ -274,11 +279,7 @@ class DataParsers:
         j_tol: float = 0.35,
         ignore_artifacts: bool = True
     ) -> Tuple[Dict[str, dict], List[Tuple[str, str, float]]]:
-        """
-        Парсер эксперимента с J-matching из 1D спектра и валидацией через COSY.
-        Возвращает узлы и взвешенные ребра с константами (u, v, J_val).
-        """
-        # 1. Извлечение 1D мультиплетов и их J-констант в герцах
+        # 1. Считывание мультиплетов и констант J
         peaks_1d = []
         item_re = re.compile(
             r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*'
@@ -302,7 +303,7 @@ class DataParsers:
                 'integ': integ
             })
 
-        # 2. HSQC: считывание пиков с точным определением фазы
+        # 2. HSQC: считывание пиков с точным знаком фазы
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip()
@@ -372,7 +373,6 @@ class DataParsers:
             c_mean = float(np.mean([p['c'] for p in cl]))
             h_list = sorted([p['h'] for p in cl], reverse=True)
 
-            # Сопоставляем протоны узла с константами J из 1D
             node_j = []
             for h in h_list:
                 for p1d in peaks_1d:
@@ -462,23 +462,20 @@ class DataParsers:
                         best_k = k
             return best_k
 
-        # 5. J-Matching + валидация COSY связей
+        # 5. J-Matching и сборка рёбер
         edges_dict = {}
-
-        # Способ А: Прямой поиск парных J-констант из 1D
         node_keys = list(exp_nodes.keys())
+
         for i in range(len(node_keys)):
             for j in range(i + 1, len(node_keys)):
                 u, v = node_keys[i], node_keys[j]
 
-                # Синглеты не могут иметь вицинальных констант связи
                 if exp_nodes[u].get('is_singlet') or exp_nodes[v].get('is_singlet'):
                     continue
 
                 u_j = exp_nodes[u]['j_vals']
                 v_j = exp_nodes[v]['j_vals']
 
-                # Ищем взаимную константу: |J_u - J_v| <= j_tol
                 shared_j = None
                 min_diff = j_tol
                 for ju in u_j:
@@ -489,7 +486,6 @@ class DataParsers:
                             shared_j = round((ju + jv) / 2.0, 1)
 
                 if shared_j is not None:
-                    # Проверяем подтверждение в COSY
                     has_cosy = False
                     for f1, f2 in cosy_pairs:
                         if (match_shift_to_node(f1) == u and match_shift_to_node(f2) == v) or \
@@ -498,11 +494,9 @@ class DataParsers:
                             break
 
                     pair = tuple(sorted((u, v)))
-                    # Если константа уникальна (1.6 Гц, 9.2 Гц, 8.8 Гц) или подтверждена COSY
                     if has_cosy or shared_j in [1.6, 9.2, 8.8, 6.9]:
                         edges_dict[pair] = shared_j
 
-        # Способ Б: Добавление надежных COSY-связей для сложных мультиплетов 'm'
         for f1, f2 in cosy_pairs:
             u = match_shift_to_node(f1)
             v = match_shift_to_node(f2)
@@ -511,7 +505,6 @@ class DataParsers:
                     continue
                 pair = tuple(sorted((u, v)))
                 if pair not in edges_dict:
-                    # Ребро из COSY без явного совпадения J (обозначаем расчетным средним ~7 Гц)
                     edges_dict[pair] = 7.0
 
         final_edges = [(u, v, j_val) for (u, v), j_val in edges_dict.items()]
@@ -519,6 +512,8 @@ class DataParsers:
 
 
 class GraphCanvasWidget(QWidget):
+    nodeClicked = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.layout = QVBoxLayout(self)
@@ -529,6 +524,27 @@ class GraphCanvasWidget(QWidget):
         self.layout.addWidget(self.toolbar)
         self.layout.addWidget(self.canvas)
 
+        self.current_pos = {}
+        self.current_nodes = {}
+        self.canvas.mpl_connect('button_press_event', self._on_canvas_click)
+
+    def _on_canvas_click(self, event):
+        """Интерактивный клик по кружку на холсте Matplotlib"""
+        if event.inaxes is None or event.xdata is None or event.ydata is None:
+            return
+
+        cx, cy = event.xdata, event.ydata
+        closest_node, min_dist = None, 0.75  # Радиус чувствительности в координатах графика
+
+        for node_id, p in self.current_pos.items():
+            dist = math.hypot(cx - p[0], cy - p[1])
+            if dist < min_dist:
+                min_dist = dist
+                closest_node = node_id
+
+        if closest_node:
+            self.nodeClicked.emit(closest_node)
+
     def draw_single_graph(self, nodes: Dict[str, dict], edges: list, title: str, has_weights: bool = False):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
@@ -537,33 +553,22 @@ class GraphCanvasWidget(QWidget):
         self.figure.tight_layout()
         self.canvas.draw()
 
-    def draw_all_three(
-        self,
-        xyz_data: Tuple[dict, list],
-        dft_data: Tuple[dict, list],
-        exp_data: Tuple[dict, list]
-    ):
-        self.figure.clear()
-        axes = self.figure.subplots(1, 3)
-
-        self._plot_graph_on_ax(axes[0], xyz_data[0], xyz_data[1], "1. Структура (XYZ)", has_weights=False)
-        self._plot_graph_on_ax(axes[1], dft_data[0], dft_data[1], "2. DFT (J расчётные)", has_weights=True)
-        self._plot_graph_on_ax(axes[2], exp_data[0], exp_data[1], "3. Эксперимент (J из 1D + COSY)", has_weights=True)
-
-        self.figure.tight_layout()
-        self.canvas.draw()
-
     def _plot_graph_on_ax(self, ax, nodes: Dict[str, dict], edges: list, title: str, has_weights: bool = False):
-        ax.set_title(title, fontsize=11, fontweight='bold', pad=10, color='#263238')
+        ax.set_title(title, fontsize=11, fontweight='bold', pad=12, color='#263238')
         ax.axis('off')
 
         if not nodes:
             ax.text(0.5, 0.5, "Нет данных для отображения", ha='center', va='center', color='#9E9E9E')
+            self.current_pos.clear()
+            self.current_nodes.clear()
             return
 
         node_keys = list(nodes.keys())
         edge_pairs = [(e[0], e[1]) if has_weights else e for e in edges]
         pos = calculate_spring_layout(node_keys, edge_pairs)
+
+        self.current_pos = pos
+        self.current_nodes = nodes
 
         # Отрисовка рёбер с подписью констант J
         if has_weights:
@@ -575,28 +580,27 @@ class GraphCanvasWidget(QWidget):
                     else:
                         ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color='#78909C', lw=1.3, ls='--', zorder=1)
 
-                    # Подпись константы J на ребре
                     mid_x = (p1[0] + p2[0]) / 2.0
                     mid_y = (p1[1] + p2[1]) / 2.0
-                    ax.text(mid_x, mid_y, f"{j_val:.1f}", fontsize=6.8, color='#D32F2F', fontweight='bold',
-                            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8), zorder=2)
+                    ax.text(mid_x, mid_y, f"{j_val:.1f}", fontsize=7.0, color='#D32F2F', fontweight='bold',
+                            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85), zorder=2)
         else:
             for u, v in edges:
                 if u in pos and v in pos:
                     p1, p2 = pos[u], pos[v]
                     ax.plot([p1[0], p2[0]], [p1[1], p2[1]], color='#455A64', lw=2.0, zorder=1)
 
-        # Отрисовка узлов
+        # Отрисовка узлов (сфер)
         for k, p in pos.items():
             g_type = nodes[k].get('type', 'CH')
             c_color = NODE_COLORS.get(g_type, '#FFB74D')
-            ax.scatter(p[0], p[1], s=1050, color=c_color, edgecolors='#263238', linewidths=1.6, zorder=3)
+            ax.scatter(p[0], p[1], s=950, color=c_color, edgecolors='#263238', linewidths=1.6, zorder=3)
             lbl = nodes[k].get('label', k)
-            ax.text(p[0], p[1], lbl, ha='center', va='center', fontsize=6.8, fontweight='bold', color='#0D47A1', zorder=4)
+            ax.text(p[0], p[1], lbl, ha='center', va='center', fontsize=7.2, fontweight='bold', color='#0D47A1', zorder=4)
 
         xs = [p[0] for p in pos.values()]
         ys = [p[1] for p in pos.values()]
-        pad = 0.7
+        pad = 1.0
         ax.set_xlim(min(xs) - pad, max(xs) + pad)
         ax.set_ylim(min(ys) - pad, max(ys) + pad)
         ax.set_aspect('equal')
@@ -605,8 +609,8 @@ class GraphCanvasWidget(QWidget):
 class GraphVisualizerApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("NMR Multi-Graph Visualizer (J-Matching Engine)")
-        self.resize(1680, 1000)
+        self.setWindowTitle("NMR Multi-Graph Visualizer (Interactive Topology)")
+        self.resize(1680, 1020)
         self.mol = None
         self.last_graphs = {}
         self._init_ui()
@@ -652,7 +656,7 @@ class GraphVisualizerApp(QMainWindow):
         tab_exp = QWidget()
         t3_l = QVBoxLayout(tab_exp)
 
-        filter_box = QGroupBox("Параметры J-Matching и фильтрации")
+        filter_box = QGroupBox("Параметры фильтрации и J-Matching")
         f_layout = QHBoxLayout(filter_box)
 
         f_layout.addWidget(QLabel("ΔC Tol (ppm):"))
@@ -718,22 +722,29 @@ class GraphVisualizerApp(QMainWindow):
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        struct_group = QGroupBox("2D Структура молекулы")
+        # Блок 2D структуры (увеличен)
+        struct_group = QGroupBox("2D Структура молекулы (Клик по атому на графе подсветит его и протоны)")
         struct_l = QVBoxLayout(struct_group)
         self.mol_view = InteractiveMolLabel("Молекула отрисуется после загрузки координат XYZ")
         self.mol_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mol_view.setStyleSheet("background-color: white; border: 1px solid #ddd;")
+        self.mol_view.setStyleSheet("background-color: white; border: 1px solid #ccc;")
+        self.mol_view.setMinimumHeight(350)
+        self.mol_view.atomClicked.connect(self.on_mol_atom_clicked)
         struct_l.addWidget(self.mol_view)
         right_splitter.addWidget(struct_group)
 
+        # Индивидуальные вкладки графов
         self.view_tabs = QTabWidget()
-        self.canvas_all = GraphCanvasWidget()
-        self.view_tabs.addTab(self.canvas_all, "Три графа рядом")
         self.canvas_xyz = GraphCanvasWidget()
+        self.canvas_xyz.nodeClicked.connect(self.on_graph_node_clicked)
         self.view_tabs.addTab(self.canvas_xyz, "1. Структура (XYZ)")
+
         self.canvas_dft = GraphCanvasWidget()
+        self.canvas_dft.nodeClicked.connect(self.on_graph_node_clicked)
         self.view_tabs.addTab(self.canvas_dft, "2. DFT")
+
         self.canvas_exp = GraphCanvasWidget()
+        self.canvas_exp.nodeClicked.connect(self.on_graph_node_clicked)
         self.view_tabs.addTab(self.canvas_exp, "3. Эксперимент (J-Matching)")
 
         self.table_nodes = QTableWidget()
@@ -743,7 +754,7 @@ class GraphVisualizerApp(QMainWindow):
         self.view_tabs.addTab(self.table_nodes, "📋 Узлы и J-константы")
 
         right_splitter.addWidget(self.view_tabs)
-        right_splitter.setSizes([260, 680])
+        right_splitter.setSizes([380, 580])
 
         r_layout.addWidget(right_splitter)
         main_splitter.addWidget(right_w)
@@ -752,17 +763,24 @@ class GraphVisualizerApp(QMainWindow):
         layout.addWidget(main_splitter)
         self.setCentralWidget(main_w)
 
-    def _render_mol(self):
+    def _render_mol(self, highlights: Optional[List[int]] = None):
         if not self.mol:
             self.mol_view.setText("Координаты XYZ не заданы.")
             return
 
-        w, h = 650, 260
+        w, h = 750, 350
         try:
             d2d = rdMolDraw2D.MolDraw2DCairo(w, h)
             opts = d2d.drawOptions()
             opts.addAtomIndices = True
-            d2d.DrawMolecule(self.mol)
+            opts.highlightBondWidthMultiplier = 3
+
+            if highlights:
+                colors = {idx: (1.0, 0.45, 0.0) for idx in highlights}
+                d2d.DrawMolecule(self.mol, highlightAtoms=highlights, highlightAtomColors=colors)
+            else:
+                d2d.DrawMolecule(self.mol)
+
             d2d.FinishDrawing()
 
             pix = QPixmap()
@@ -779,7 +797,11 @@ class GraphVisualizerApp(QMainWindow):
             try:
                 d2d_svg = rdMolDraw2D.MolDraw2DSVG(w, h)
                 d2d_svg.drawOptions().addAtomIndices = True
-                d2d_svg.DrawMolecule(self.mol)
+                if highlights:
+                    colors = {idx: (1.0, 0.45, 0.0) for idx in highlights}
+                    d2d_svg.DrawMolecule(self.mol, highlightAtoms=highlights, highlightAtomColors=colors)
+                else:
+                    d2d_svg.DrawMolecule(self.mol)
                 d2d_svg.FinishDrawing()
                 svg_bytes = d2d_svg.GetDrawingText().encode('utf-8')
 
@@ -793,6 +815,36 @@ class GraphVisualizerApp(QMainWindow):
                 self.mol_view.setPixmap(QPixmap.fromImage(image))
             except Exception as e:
                 self.mol_view.setText(f"Ошибка отрисовки: {e}")
+
+    def on_graph_node_clicked(self, node_id: str):
+        """Подсветка атома и его водородов при клике по узлу на любом графе"""
+        if not self.mol:
+            return
+
+        c_idx = None
+        if node_id.startswith("C_"):
+            c_idx = int(node_id.replace("C_", ""))
+        elif node_id.startswith("DFT_"):
+            c_idx = int(node_id.replace("DFT_", ""))
+
+        if c_idx is not None and 0 <= c_idx < self.mol.GetNumAtoms():
+            atom = self.mol.GetAtomWithIdx(c_idx)
+            h_indices = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'H']
+            self._render_mol(highlights=[c_idx] + h_indices)
+
+    def on_mol_atom_clicked(self, atom_idx: int):
+        """Подсветка при прямом клике на 2D-рисунок"""
+        if not self.mol or atom_idx >= self.mol.GetNumAtoms():
+            return
+        atom = self.mol.GetAtomWithIdx(atom_idx)
+        if atom.GetSymbol() == 'C':
+            h_indices = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'H']
+            self._render_mol(highlights=[atom_idx] + h_indices)
+        elif atom.GetSymbol() == 'H':
+            c_parent = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'C']
+            self._render_mol(highlights=[atom_idx] + c_parent)
+        else:
+            self._render_mol(highlights=[atom_idx])
 
     def _populate_table(self, nodes: Dict[str, dict]):
         self.table_nodes.setRowCount(len(nodes))
@@ -837,14 +889,7 @@ class GraphVisualizerApp(QMainWindow):
             self.canvas_exp.draw_single_graph(exp_nodes, exp_edges, f"Эксперимент: 1D J-Match + COSY ({len(exp_nodes)} узлов, {len(exp_edges)} связей)", has_weights=True)
             self._populate_table(exp_nodes)
 
-            # 4. Общий вид
-            self.canvas_all.draw_all_three(
-                (xyz_nodes, xyz_edges),
-                (dft_nodes, dft_edges),
-                (exp_nodes, exp_edges)
-            )
-
-            # 5. Экспорт структуры графов
+            # 4. Экспорт структуры графов
             self.last_graphs = {
                 "xyz_graph": {"nodes": xyz_nodes, "edges": [list(e) for e in xyz_edges]},
                 "dft_graph": {"nodes": dft_nodes, "edges": [list(e) for e in dft_edges]},
