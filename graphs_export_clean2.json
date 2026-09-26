@@ -1,0 +1,563 @@
+{
+  "xyz_graph": {
+    "nodes": {
+      "C_0": {
+        "label": "C 0\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_2": {
+        "label": "C 2\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_4": {
+        "label": "C 4\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_12": {
+        "label": "C 12\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_17": {
+        "label": "C 17\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_18": {
+        "label": "C 18\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_25": {
+        "label": "C 25\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_26": {
+        "label": "C 26\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_27": {
+        "label": "C 27\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_29": {
+        "label": "C 29\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_31": {
+        "label": "C 31\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_38": {
+        "label": "C 38\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_47": {
+        "label": "C 47\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_48": {
+        "label": "C 48\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_53": {
+        "label": "C 53\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_54": {
+        "label": "C 54\n(CH1)",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "C_58": {
+        "label": "C 58\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_60": {
+        "label": "C 60\n(CH2)",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "C_67": {
+        "label": "C 67\n(CH3)",
+        "type": "CH3",
+        "h_count": 3
+      }
+    },
+    "edges": [
+      [
+        "C_0",
+        "C_4"
+      ],
+      [
+        "C_17",
+        "C_18"
+      ],
+      [
+        "C_25",
+        "C_26"
+      ],
+      [
+        "C_25",
+        "C_27"
+      ],
+      [
+        "C_25",
+        "C_29"
+      ],
+      [
+        "C_25",
+        "C_31"
+      ],
+      [
+        "C_26",
+        "C_27"
+      ],
+      [
+        "C_26",
+        "C_29"
+      ],
+      [
+        "C_26",
+        "C_31"
+      ],
+      [
+        "C_27",
+        "C_29"
+      ],
+      [
+        "C_27",
+        "C_31"
+      ],
+      [
+        "C_53",
+        "C_54"
+      ],
+      [
+        "C_53",
+        "C_58"
+      ],
+      [
+        "C_54",
+        "C_58"
+      ],
+      [
+        "C_54",
+        "C_60"
+      ],
+      [
+        "C_58",
+        "C_60"
+      ]
+    ]
+  },
+  "dft_graph": {
+    "nodes": {
+      "DFT_0": {
+        "label": "C 0\nH:[6]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_2": {
+        "label": "C 2\nH:[7]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_4": {
+        "label": "C 4\nH:[8]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_12": {
+        "label": "C 12\nH:[14,15]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_17": {
+        "label": "C 17\nH:[22]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_18": {
+        "label": "C 18\nH:[23]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_25": {
+        "label": "C 25\nH:[28]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_26": {
+        "label": "C 26\nH:[30]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_27": {
+        "label": "C 27\nH:[32]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_29": {
+        "label": "C 29\nH:[34,35]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_31": {
+        "label": "C 31\nH:[36,37]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_38": {
+        "label": "C 38\nH:[40,41]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_47": {
+        "label": "C 47\nH:[51]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_48": {
+        "label": "C 48\nH:[50]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_53": {
+        "label": "C 53\nH:[55,56]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_54": {
+        "label": "C 54\nH:[59]",
+        "type": "CH1",
+        "h_count": 1
+      },
+      "DFT_58": {
+        "label": "C 58\nH:[63,64]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_60": {
+        "label": "C 60\nH:[61,62]",
+        "type": "CH2",
+        "h_count": 2
+      },
+      "DFT_67": {
+        "label": "C 67\nH:[68,69,70]",
+        "type": "CH3",
+        "h_count": 3
+      }
+    },
+    "edges": [
+      [
+        "DFT_0",
+        "DFT_2",
+        1.651
+      ],
+      [
+        "DFT_0",
+        "DFT_4",
+        6.964
+      ],
+      [
+        "DFT_17",
+        "DFT_18",
+        8.268
+      ],
+      [
+        "DFT_25",
+        "DFT_26",
+        3.121
+      ],
+      [
+        "DFT_25",
+        "DFT_27",
+        3.122
+      ],
+      [
+        "DFT_26",
+        "DFT_27",
+        8.292
+      ],
+      [
+        "DFT_26",
+        "DFT_29",
+        5.897
+      ],
+      [
+        "DFT_27",
+        "DFT_31",
+        6.032
+      ],
+      [
+        "DFT_53",
+        "DFT_54",
+        11.782
+      ],
+      [
+        "DFT_54",
+        "DFT_58",
+        7.708
+      ],
+      [
+        "DFT_58",
+        "DFT_60",
+        9.413
+      ]
+    ]
+  },
+  "exp_graph": {
+    "nodes": {
+      "EXP_0": {
+        "c": 68.16,
+        "h_list": [
+          4.46,
+          4.34
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "4.46, 4.34\n68.2 (CH2)"
+      },
+      "EXP_1": {
+        "c": 54.84,
+        "h_list": [
+          3.04,
+          2.92
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "3.04, 2.92\n54.8 (CH2)"
+      },
+      "EXP_2": {
+        "c": 49.4,
+        "h_list": [
+          4.55,
+          4.46
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "4.55, 4.46\n49.4 (CH2)"
+      },
+      "EXP_3": {
+        "c": 25.19,
+        "h_list": [
+          2.67
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "2.67 (2H)\n25.2 (CH2)"
+      },
+      "EXP_4": {
+        "c": 51.23,
+        "h_list": [
+          3.87
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "3.87 (2H)\n51.2 (CH2)"
+      },
+      "EXP_5": {
+        "c": 54.39,
+        "h_list": [
+          2.56
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "2.56 (2H)\n54.4 (CH2)"
+      },
+      "EXP_6": {
+        "c": 54.96,
+        "h_list": [
+          2.93
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "2.93 (2H)\n55.0 (CH2)"
+      },
+      "EXP_7": {
+        "c": 61.23,
+        "h_list": [
+          5.36
+        ],
+        "type": "CH2",
+        "h_count": 2,
+        "label": "5.36 (2H)\n61.2 (CH2)"
+      },
+      "EXP_8": {
+        "c": 132.05,
+        "h_list": [
+          7.63
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "7.63\n132.1 (CH)"
+      },
+      "EXP_9": {
+        "c": 129.42,
+        "h_list": [
+          7.69
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "7.69\n129.4 (CH)"
+      },
+      "EXP_10": {
+        "c": 127.2,
+        "h_list": [
+          7.55
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "7.55\n127.2 (CH)"
+      },
+      "EXP_11": {
+        "c": 108.28,
+        "h_list": [
+          6.64
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "6.64\n108.3 (CH)"
+      },
+      "EXP_12": {
+        "c": 18.84,
+        "h_list": [
+          2.43
+        ],
+        "type": "CH3",
+        "h_count": 3,
+        "label": "2.43 (3H)\n18.8 (CH3)"
+      },
+      "EXP_13": {
+        "c": 27.61,
+        "h_list": [
+          1.91
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "1.91\n27.6 (CH)"
+      },
+      "EXP_14": {
+        "c": 55.56,
+        "h_list": [
+          3.87
+        ],
+        "type": "CH3",
+        "h_count": 3,
+        "label": "3.87 (3H)\n55.6 (CH3)"
+      },
+      "EXP_15": {
+        "c": 80.7,
+        "h_list": [
+          5.02
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "5.02\n80.7 (CH)"
+      },
+      "EXP_16": {
+        "c": 104.75,
+        "h_list": [
+          7.63
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "7.63\n104.8 (CH)"
+      },
+      "EXP_17": {
+        "c": 105.02,
+        "h_list": [
+          7.3
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "7.30\n105.0 (CH)"
+      },
+      "EXP_18": {
+        "c": 120.13,
+        "h_list": [
+          7.88
+        ],
+        "type": "CH",
+        "h_count": 1,
+        "label": "7.88\n120.1 (CH)"
+      }
+    },
+    "edges": [
+      [
+        "EXP_0",
+        "EXP_12"
+      ],
+      [
+        "EXP_17",
+        "EXP_8"
+      ],
+      [
+        "EXP_1",
+        "EXP_3"
+      ],
+      [
+        "EXP_5",
+        "EXP_6"
+      ],
+      [
+        "EXP_12",
+        "EXP_13"
+      ],
+      [
+        "EXP_0",
+        "EXP_2"
+      ],
+      [
+        "EXP_0",
+        "EXP_15"
+      ],
+      [
+        "EXP_8",
+        "EXP_9"
+      ],
+      [
+        "EXP_12",
+        "EXP_3"
+      ],
+      [
+        "EXP_18",
+        "EXP_9"
+      ],
+      [
+        "EXP_0",
+        "EXP_3"
+      ],
+      [
+        "EXP_10",
+        "EXP_8"
+      ],
+      [
+        "EXP_15",
+        "EXP_3"
+      ],
+      [
+        "EXP_15",
+        "EXP_2"
+      ],
+      [
+        "EXP_13",
+        "EXP_5"
+      ]
+    ]
+  }
+}
