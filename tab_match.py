@@ -7,7 +7,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QColor
 
 from rdkit.Chem.Draw import rdMolDraw2D
-from core import InteractiveMolLabel
+# Добавляем импорт холста графов из ядра
+from core import InteractiveMolLabel, InteractiveGraphCanvas
 
 
 class MatcherTab(QWidget):
@@ -19,20 +20,34 @@ class MatcherTab(QWidget):
 
     def _init_ui(self):
         layout = QHBoxLayout(self)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Левая часть: Молекула
+        # Левая часть: Молекула (верх) и Экспериментальный граф (низ)
         left_w = QWidget()
         l_layout = QVBoxLayout(left_w)
-        gb = QGroupBox("2D Структура (Подсветка по клику)")
-        gbl = QVBoxLayout(gb)
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # 1. Молекула
+        gb_mol = QGroupBox("2D Структура (Подсветка по клику)")
+        gbl_mol = QVBoxLayout(gb_mol)
         self.mol_view = InteractiveMolLabel("Нет данных. Сначала постройте графы на первой вкладке.")
         self.mol_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mol_view.setStyleSheet("background-color: white; border: 1px solid #ccc;")
+        self.mol_view.setStyleSheet("background-color: white; border: 1px solid #ccc; border-radius: 4px;")
         self.mol_view.atomClicked.connect(self.on_mol_atom_clicked)
-        gbl.addWidget(self.mol_view)
-        l_layout.addWidget(gb)
-        splitter.addWidget(left_w)
+        gbl_mol.addWidget(self.mol_view)
+        left_splitter.addWidget(gb_mol)
+
+        # 2. Экспериментальный граф
+        gb_graph = QGroupBox("Экспериментальный граф (COSY / J-match)")
+        gbl_graph = QVBoxLayout(gb_graph)
+        self.canvas_exp = InteractiveGraphCanvas()
+        self.canvas_exp.nodeClicked.connect(self.on_exp_node_clicked)
+        gbl_graph.addWidget(self.canvas_exp)
+        left_splitter.addWidget(gb_graph)
+
+        left_splitter.setSizes([350, 450])
+        l_layout.addWidget(left_splitter)
+        main_splitter.addWidget(left_w)
 
         # Правая часть: Таблица
         right_w = QWidget()
@@ -51,9 +66,9 @@ class MatcherTab(QWidget):
         self.table.itemSelectionChanged.connect(self.on_table_row_selected)
         r_layout.addWidget(self.table)
 
-        splitter.addWidget(right_w)
-        splitter.setSizes([450, 700])
-        layout.addWidget(splitter)
+        main_splitter.addWidget(right_w)
+        main_splitter.setSizes([550, 700])
+        layout.addWidget(main_splitter)
 
     def load_data_and_match(self, graphs_data: dict, mol):
         """Функция принимает данные из первой вкладки напрямую в памяти."""
@@ -65,6 +80,9 @@ class MatcherTab(QWidget):
         dft_edges = self.graphs_data.get("dft_graph", {}).get("edges", [])
         exp_nodes = self.graphs_data.get("exp_graph", {}).get("nodes", {})
         exp_edges = self.graphs_data.get("exp_graph", {}).get("edges", [])
+
+        # Отрисовываем граф эксперимента на новой панели
+        self.canvas_exp.set_graph(exp_nodes, exp_edges, has_weights=True)
 
         # Вычисляем списки J для узлов
         dft_node_j = {k: [] for k in xyz_nodes}
@@ -130,10 +148,14 @@ class MatcherTab(QWidget):
                          QTableWidgetItem(e_node), QTableWidgetItem(g_type), QTableWidgetItem(shift_str),
                          QTableWidgetItem(reason)]
                 for it in items: it.setBackground(c_green)
+
+                # Сохраняем имя экспериментального узла для обратной связи при клике
+                items[2].setData(Qt.ItemDataRole.UserRole, e_node)
             else:
                 items = [QTableWidgetItem("Не соотнесено"), QTableWidgetItem(f"{d_node} (DFT)"), QTableWidgetItem("—"),
                          QTableWidgetItem(g_type), QTableWidgetItem("—"), QTableWidgetItem("Топологический поиск")]
                 for it in items: it.setBackground(c_gray)
+                items[2].setData(Qt.ItemDataRole.UserRole, None)
 
             items[0].setData(Qt.ItemDataRole.UserRole, c_idx)
             for i, it in enumerate(items): self.table.setItem(row, i, it)
@@ -143,10 +165,10 @@ class MatcherTab(QWidget):
     def _render_mol(self, highlights: Optional[List[int]] = None):
         if not self.mol: return
         try:
-            d2d = rdMolDraw2D.MolDraw2DCairo(500, 450)
+            d2d = rdMolDraw2D.MolDraw2DCairo(500, 350)
             opts = d2d.drawOptions()
             opts.addAtomIndices = True
-            opts.highlightBondWidthMultiplier = 3  # СТРОГО INT
+            opts.highlightBondWidthMultiplier = 3
             if highlights:
                 d2d.DrawMolecule(self.mol, highlightAtoms=highlights,
                                  highlightAtomColors={i: (1.0, 0.40, 0.0) for i in highlights})
@@ -166,7 +188,8 @@ class MatcherTab(QWidget):
     def on_table_row_selected(self):
         items = self.table.selectedItems()
         if not items: return
-        c_idx = self.table.item(items[0].row(), 0).data(Qt.ItemDataRole.UserRole)
+        row = items[0].row()
+        c_idx = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         if c_idx is not None and self.mol and c_idx < self.mol.GetNumAtoms():
             self._render_mol(
                 [c_idx] + [n.GetIdx() for n in self.mol.GetAtomWithIdx(c_idx).GetNeighbors() if n.GetSymbol() == 'H'])
@@ -181,4 +204,13 @@ class MatcherTab(QWidget):
             if item.data(Qt.ItemDataRole.UserRole) == c_idx:
                 self.table.selectRow(r)
                 self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                break
+
+    def on_exp_node_clicked(self, node_id: str):
+        # Если кликнуть по узлу на графе EXP, таблица проскроллится до него (если он уже якорь)
+        for r in range(self.table.rowCount()):
+            item_exp = self.table.item(r, 2)
+            if item_exp.data(Qt.ItemDataRole.UserRole) == node_id:
+                self.table.selectRow(r)
+                self.table.scrollToItem(item_exp, QAbstractItemView.ScrollHint.PositionAtCenter)
                 break
