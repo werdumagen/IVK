@@ -4,7 +4,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSplitter, QGroupBox, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QComboBox)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+# ИСПРАВЛЕНИЕ: Добавлен импорт QPixmap
+from PyQt6.QtGui import QColor, QPixmap
 
 from rdkit.Chem.Draw import rdMolDraw2D
 from core import InteractiveMolLabel, InteractiveGraphCanvas
@@ -234,10 +235,16 @@ class MatcherTab(QWidget):
     def on_table_row_selected(self):
         items = self.table.selectedItems()
         if not items: return
-        c_idx = self.table.item(items[0].row(), 0).data(Qt.ItemDataRole.UserRole)
+        row = items[0].row()
+        item = self.table.item(row, 0)
+        if item is None: return
+        c_idx = item.data(Qt.ItemDataRole.UserRole)
+
+        # Подсветка атома углерода и всех его водородов
         if c_idx is not None and self.mol and c_idx < self.mol.GetNumAtoms():
-            self._render_mol(
-                [c_idx] + [n.GetIdx() for n in self.mol.GetAtomWithIdx(c_idx).GetNeighbors() if n.GetSymbol() == 'H'])
+            atom = self.mol.GetAtomWithIdx(c_idx)
+            h_indices = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'H']
+            self._render_mol(highlights=[c_idx] + h_indices)
 
     def on_mol_atom_clicked(self, atom_idx: int):
         if not self.mol or atom_idx >= self.mol.GetNumAtoms(): return
