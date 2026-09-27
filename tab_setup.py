@@ -49,13 +49,13 @@ class VisualizerTab(QWidget):
 
         tms_lay = QHBoxLayout()
         tms_lay.addWidget(QLabel("TMS 13C:"))
-        self.sp_tms_c = QDoubleSpinBox();
-        self.sp_tms_c.setRange(0, 300);
+        self.sp_tms_c = QDoubleSpinBox()
+        self.sp_tms_c.setRange(0, 300)
         self.sp_tms_c.setValue(188.1)
         tms_lay.addWidget(self.sp_tms_c)
         tms_lay.addWidget(QLabel("TMS 1H:"))
-        self.sp_tms_h = QDoubleSpinBox();
-        self.sp_tms_h.setRange(0, 50);
+        self.sp_tms_h = QDoubleSpinBox()
+        self.sp_tms_h.setRange(0, 50)
         self.sp_tms_h.setValue(31.8)
         tms_lay.addWidget(self.sp_tms_h)
         t2_l.addLayout(tms_lay)
@@ -81,32 +81,32 @@ class VisualizerTab(QWidget):
         t3_l = QVBoxLayout(t3)
         fbox = QGroupBox("Параметры фильтрации и J-Matching")
         fl = QHBoxLayout(fbox)
-        self.sp_ctol = QDoubleSpinBox();
+        self.sp_ctol = QDoubleSpinBox()
         self.sp_ctol.setValue(0.25)
-        self.sp_jtol = QDoubleSpinBox();
+        self.sp_jtol = QDoubleSpinBox()
         self.sp_jtol.setValue(0.95)
-        self.sp_area = QDoubleSpinBox();
+        self.sp_area = QDoubleSpinBox()
         self.sp_area.setValue(0.20)
-        self.chk_art = QCheckBox("Без артефактов");
+        self.chk_art = QCheckBox("Без артефактов")
         self.chk_art.setChecked(True)
-        fl.addWidget(QLabel("ΔC Tol:"));
+        fl.addWidget(QLabel("ΔC Tol:"))
         fl.addWidget(self.sp_ctol)
-        fl.addWidget(QLabel("ΔJ Tol:"));
+        fl.addWidget(QLabel("ΔJ Tol:"))
         fl.addWidget(self.sp_jtol)
-        fl.addWidget(QLabel("Min Area:"));
+        fl.addWidget(QLabel("Min Area:"))
         fl.addWidget(self.sp_area)
         fl.addWidget(self.chk_art)
         t3_l.addWidget(fbox)
 
-        self.txt_1d = QTextEdit();
+        self.txt_1d = QTextEdit()
         self.txt_1d.setMaximumHeight(65)
         self.txt_hsqc = QTextEdit()
         self.txt_cosy = QTextEdit()
-        t3_l.addWidget(QLabel("1D 1H NMR:"));
+        t3_l.addWidget(QLabel("1D 1H NMR:"))
         t3_l.addWidget(self.txt_1d)
-        t3_l.addWidget(QLabel("2D HSQC:"));
+        t3_l.addWidget(QLabel("2D HSQC:"))
         t3_l.addWidget(self.txt_hsqc)
-        t3_l.addWidget(QLabel("2D COSY:"));
+        t3_l.addWidget(QLabel("2D COSY:"))
         t3_l.addWidget(self.txt_cosy)
 
         self.tabs_in.addTab(t1, "1. XYZ")
@@ -198,14 +198,14 @@ class VisualizerTab(QWidget):
         data = {
             "xyz": self.txt_xyz.toPlainText(), "dft": self.txt_dft.toPlainText(),
             "dft_shield": self.txt_dft_shielding.toPlainText(),
-            "exp1d": self.txt_1d.toPlainText(), "hsqc": self.txt_hsqc.toPlainText(),
-            "cosy": self.txt_cosy.toPlainText(),
+            "exp1d": self.txt_1d.toPlainText(), "hsqc": self.txt_hsqc.toPlainText(), "cosy": self.txt_cosy.toPlainText(),
             "settings": {"c_tol": self.sp_ctol.value(), "j_tol": self.sp_jtol.value(), "area": self.sp_area.value(),
                          "tms_c": self.sp_tms_c.value(), "tms_h": self.sp_tms_h.value()}
         }
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить", "", "JSON (*.json)")
         if path:
-            with open(path, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=2)
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
 
     def load_session(self):
         path, _ = QFileDialog.getOpenFileName(self, "Загрузить", "", "JSON (*.json)")
@@ -219,8 +219,13 @@ class VisualizerTab(QWidget):
             self.txt_hsqc.setPlainText(data.get("hsqc", ""))
             self.txt_cosy.setPlainText(data.get("cosy", ""))
             st = data.get("settings", {})
-            if "c_tol" in st: self.sp_ctol.setValue(st["c_tol"])
-            if "j_tol" in st: self.sp_jtol.setValue(st["j_tol"])
-            if "area" in st: self.sp_area.setValue(st["area"])
-            if "tms_c" in st: self.sp_tms_c.setValue(st["tms_c"])
-            if "tms_h" in st: self.sp_tms_h.setValue(st["tms_h"])
+            if "c_tol" in st:
+                self.sp_ctol.setValue(st["c_tol"])
+            if "j_tol" in st:
+                self.sp_jtol.setValue(st["j_tol"])
+            if "area" in st:
+                self.sp_area.setValue(st["area"])
+            if "tms_c" in st:
+                self.sp_tms_c.setValue(st["tms_c"])
+            if "tms_h" in st:
+                self.sp_tms_h.setValue(st["tms_h"])

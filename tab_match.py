@@ -2,17 +2,17 @@
 import sys
 import json
 import traceback
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSplitter, QGroupBox, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QComboBox, QListView,
-                             QMessageBox, QPushButton, QFileDialog)
+                             QHeaderView, QAbstractItemView, QMessageBox, QPushButton, QFileDialog)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPixmap
 
+from rdkit import Chem
 from rdkit.Chem.Draw import rdMolDraw2D
-from core import InteractiveMolLabel, InteractiveGraphCanvas
+from core import InteractiveMolLabel, InteractiveGraphCanvas, ScrollableComboBox
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
@@ -20,7 +20,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     err_msg = "".join(tb_lines)
     print(err_msg, file=sys.stderr)
     QMessageBox.critical(None, "Ошибка сопоставления", f"Произошел сбой:\n\n{err_msg}")
-
 
 sys.excepthook = handle_exception
 
@@ -40,7 +39,7 @@ class MatcherTab(QWidget):
         l_layout = QVBoxLayout(left_w)
         left_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        gb_mol = QGroupBox("2D Структура (Подсветка по клику)")
+        gb_mol = QGroupBox("2D Структура (Оранжевый: атом, Зеленый: J-соседи, Синий: связи)")
         gbl_mol = QVBoxLayout(gb_mol)
         self.mol_view = InteractiveMolLabel("Нет данных. Сначала постройте графы на первой вкладке.")
         self.mol_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -56,14 +55,13 @@ class MatcherTab(QWidget):
         gbl_graph.addWidget(self.canvas_exp)
         left_splitter.addWidget(gb_graph)
 
-        left_splitter.setSizes([350, 450])
+        left_splitter.setSizes([380, 420])
         l_layout.addWidget(left_splitter)
         main_splitter.addWidget(left_w)
 
         right_w = QWidget()
         r_layout = QVBoxLayout(right_w)
 
-        # Верхняя панель: Статус + Кнопка Экспорта для ИИ
         top_bar = QHBoxLayout()
         self.lbl_info = QLabel("Ожидание данных...")
         self.lbl_info.setStyleSheet("font-weight: bold; font-size: 13px; color: #1565C0; padding: 4px;")
@@ -93,6 +91,9 @@ class MatcherTab(QWidget):
         main_splitter.setSizes([550, 700])
         layout.addWidget(main_splitter)
 
+    def _norm_type(self, t: str) -> str:
+        return 'CH' if t in ['CH', 'CH1'] else t
+
     def load_data_and_match(self, graphs_data: dict, mol):
         self.graphs_data = graphs_data
         self.mol = mol
@@ -110,25 +111,21 @@ class MatcherTab(QWidget):
         for e in dft_edges:
             u, v = e[0].replace("DFT_", "C_"), e[1].replace("DFT_", "C_")
             j_val = e[2] if len(e) >= 3 else 7.0
-            if u in dft_node_j: dft_node_j[u].append(j_val)
-            if v in dft_node_j: dft_node_j[v].append(j_val)
+            if u in dft_node_j:
+                dft_node_j[u].append(j_val)
+            if v in dft_node_j:
+                dft_node_j[v].append(j_val)
         for k in dft_node_j:
             dft_node_j[k] = sorted([round(x, 1) for x in dft_node_j[k]])
 
-        exp_node_j = {k: [] for k in exp_nodes}
-        for e in exp_edges:
-            u, v = e[0], e[1]
-            j_val = e[2] if len(e) >= 3 else 7.0
-            if u in exp_node_j: exp_node_j[u].append(j_val)
-            if v in exp_node_j: exp_node_j[v].append(j_val)
-        for k in exp_node_j:
-            exp_node_j[k] = sorted([round(x, 1) for x in exp_node_j[k]])
-
         def get_dft_multiplicity(j_list: List[float]) -> str:
             n_j = len(j_list)
-            if n_j == 0: return 's'
-            if n_j == 1: return 'd'
-            if n_j == 2: return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
+            if n_j == 0:
+                return 's'
+            if n_j == 1:
+                return 'd'
+            if n_j == 2:
+                return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
             return 'm'
 
         def check_shifts_valid(d_node_key: str, e_node_key: str, c_lim: float = 15.0, h_lim: float = 0.5) -> bool:
@@ -144,6 +141,13 @@ class MatcherTab(QWidget):
             h_dfts = sorted([float(x) for x in d_d.get('h_shifts', []) if x is not None])
             h_exps = sorted([float(x) for x in e_d.get('h_list', []) if x is not None])
 
+            d_type = self._norm_type(xyz_nodes[d_node_key].get('type'))
+            e_type = self._norm_type(e_d.get('type'))
+
+            if d_type == 'CH3':
+                # Для метила усредняем вращение
+                return abs(float(np.mean(h_dfts)) - float(np.mean(h_exps))) <= 1.0
+
             if not e_d.get('is_complete', True):
                 return False
 
@@ -158,26 +162,26 @@ class MatcherTab(QWidget):
 
         anchors, used_exp = {}, set()
 
-        # Шаг 1: Авто-Якорь CH3 (уникальный)
-        xyz_ch3 = [k for k, v in xyz_nodes.items() if v.get('type') == 'CH3' and k not in anchors]
-        exp_ch3 = [k for k, v in exp_nodes.items() if v.get('type') == 'CH3' and k not in used_exp]
+        # Шаг 1: Автосопоставление метила CH3 (уникальный)
+        xyz_ch3 = [k for k, v in xyz_nodes.items() if self._norm_type(v.get('type')) == 'CH3' and k not in anchors]
+        exp_ch3 = [k for k, v in exp_nodes.items() if self._norm_type(v.get('type')) == 'CH3' and k not in used_exp]
         if len(xyz_ch3) == 1 and len(exp_ch3) == 1:
             if check_shifts_valid(xyz_ch3[0], exp_ch3[0], c_lim=20.0, h_lim=1.0):
                 anchors[xyz_ch3[0]] = (exp_ch3[0], "Уникальный CH3")
                 used_exp.add(exp_ch3[0])
 
-        # Шаг 2: Строгое совпадение сдвигов и мультиплетности (ΔC <= 15, ΔH <= 0.5 для каждого протона)
+        # Шаг 2: Строгое совпадение сдвигов и мультиплетности (ΔC <= 15, ΔH <= 0.5, строго один кандидат)
         for d_node in sorted(xyz_nodes.keys(), key=lambda x: int(x.split('_')[1])):
             if d_node in anchors:
                 continue
             c_idx = int(d_node.split('_')[1])
             d_d = dft_nodes.get(f"DFT_{c_idx}", {})
-            d_type = xyz_nodes[d_node].get('type')
+            d_type = self._norm_type(xyz_nodes[d_node].get('type'))
             d_mult = get_dft_multiplicity(dft_node_j.get(d_node, []))
 
             strict_cands = []
             for e_node, e_d in exp_nodes.items():
-                if e_node in used_exp or e_d.get('type') != d_type:
+                if e_node in used_exp or self._norm_type(e_d.get('type')) != d_type:
                     continue
 
                 if not check_shifts_valid(d_node, e_node, c_lim=15.0, h_lim=0.5):
@@ -211,7 +215,7 @@ class MatcherTab(QWidget):
             row = self.table.rowCount()
             self.table.insertRow(row)
             c_idx = int(d_node.split('_')[1])
-            g_type = xyz_nodes[d_node].get('type', 'CH')
+            g_type = self._norm_type(xyz_nodes[d_node].get('type', 'CH'))
 
             dft_key = f"DFT_{c_idx}"
             d_data = dft_nodes.get(dft_key, {})
@@ -238,17 +242,13 @@ class MatcherTab(QWidget):
             self.table.setItem(row, 4, item_exp_val)
             self.table.setItem(row, 5, item_reason)
 
-            cb = QComboBox()
+            cb = ScrollableComboBox()
             cb.blockSignals(True)
-            cb_view = QListView()
-            cb_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            cb.setView(cb_view)
-            cb.setMaxVisibleItems(15)
-            cb.setStyleSheet("QComboBox { combobox-popup: 0; }")
-
             cb.addItem("— Не выбрано —", userData=None)
+
+            # Заполняем всеми подходящими по типу узлами
             for ek, ev in exp_nodes.items():
-                if ev.get('type') == g_type:
+                if self._norm_type(ev.get('type')) == g_type:
                     tag = "" if ev.get('is_complete', True) else " [1H]"
                     cb.addItem(f"{ek}{tag} (δC {ev.get('c', 0):.1f})", userData=ek)
 
@@ -305,10 +305,157 @@ class MatcherTab(QWidget):
             for it in [item_status, item_dft, item_dft_val, item_exp_val, item_reason]:
                 it.setBackground(c_gray)
 
+    def highlight_atom_and_connections(self, c_idx: int):
+        """Подсвечивает сам атом, его протоны, химических соседей и DFT спин-партнеров."""
+        if not self.mol or c_idx >= self.mol.GetNumAtoms():
+            return
+
+        atom = self.mol.GetAtomWithIdx(c_idx)
+        own_protons = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'H']
+        bonded_neighbors = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() != 'H']
+
+        # Ищем партнеров по спин-спиновому взаимодействию DFT
+        dft_edges = self.graphs_data.get("dft_graph", {}).get("edges", [])
+        dft_node_name = f"DFT_{c_idx}"
+        j_partners = []
+        j_partner_protons = []
+        j_info_list = []
+
+        for e in dft_edges:
+            u, v = e[0], e[1]
+            jv = e[2] if len(e) >= 3 else 0.0
+            partner_key = None
+            if u == dft_node_name:
+                partner_key = v
+            elif v == dft_node_name:
+                partner_key = u
+
+            if partner_key:
+                p_c_idx = int(partner_key.replace("DFT_", ""))
+                j_partners.append(p_c_idx)
+                j_info_list.append(f"C_{p_c_idx} ({jv:.1f} Гц)")
+                if p_c_idx < self.mol.GetNumAtoms():
+                    p_atom = self.mol.GetAtomWithIdx(p_c_idx)
+                    j_partner_protons.extend([n.GetIdx() for n in p_atom.GetNeighbors() if n.GetSymbol() == 'H'])
+
+        # Настраиваем палитру цветов
+        colors = {}
+        colors[c_idx] = (1.0, 0.25, 0.0)             # Выбранный атом (Ярко-красно-оранжевый)
+        for h in own_protons:
+            colors[h] = (1.0, 0.65, 0.0)             # Его протоны (Янтарный)
+        for b in bonded_neighbors:
+            colors[b] = (0.12, 0.55, 1.0)            # Химически связанные соседи (Синий)
+        for jp in j_partners:
+            colors[jp] = (0.15, 0.80, 0.30)          # J-спиновые партнеры DFT (Изумрудно-зеленый)
+        for jph in j_partner_protons:
+            colors[jph] = (0.45, 0.90, 0.20)         # Протоны J-партнеров (Салатовый)
+
+        # Подсвечиваем связи к соседям
+        highlight_bonds = []
+        for b in bonded_neighbors:
+            bond = self.mol.GetBondBetweenAtoms(c_idx, b)
+            if bond:
+                highlight_bonds.append(bond.GetIdx())
+        for h in own_protons:
+            bond = self.mol.GetBondBetweenAtoms(c_idx, h)
+            if bond:
+                highlight_bonds.append(bond.GetIdx())
+
+        all_highlight_atoms = list(colors.keys())
+        self._render_mol(highlights=all_highlight_atoms, highlight_colors=colors, highlight_bonds=highlight_bonds)
+
+        # Выводим подсказку в интерфейс
+        bonded_str = ", ".join([f"{self.mol.GetAtomWithIdx(b).GetSymbol()}_{b}" for b in bonded_neighbors]) or "нет"
+        j_str = ", ".join(j_info_list) or "нет"
+        self.lbl_info.setText(f"Выбран C_{c_idx} | Связан с: {bonded_str} | J-партнеры DFT: {j_str}")
+
+    def _render_mol(self, highlights: Optional[List[int]] = None,
+                    highlight_colors: Optional[Dict[int, tuple]] = None,
+                    highlight_bonds: Optional[List[int]] = None):
+        if not self.mol:
+            return
+        try:
+            d2d = rdMolDraw2D.MolDraw2DCairo(500, 350)
+            opts = d2d.drawOptions()
+            opts.addAtomIndices = True
+            opts.highlightBondWidthMultiplier = 3
+
+            if highlights:
+                d2d.DrawMolecule(
+                    self.mol,
+                    highlightAtoms=highlights,
+                    highlightAtomColors=highlight_colors,
+                    highlightBonds=highlight_bonds
+                )
+            else:
+                d2d.DrawMolecule(self.mol)
+
+            d2d.FinishDrawing()
+            pix = QPixmap()
+            pix.loadFromData(d2d.GetDrawingText())
+            self.mol_view.setPixmap(pix)
+            self.mol_view.atom_coords.clear()
+            for atom in self.mol.GetAtoms():
+                pt = d2d.GetDrawCoords(atom.GetIdx())
+                self.mol_view.atom_coords[atom.GetIdx()] = (pt.x, pt.y)
+        except Exception as e:
+            self.mol_view.setText(f"Ошибка рендера RDKit: {e}")
+
+    def on_table_row_selected(self):
+        items = self.table.selectedItems()
+        if not items:
+            return
+        row = items[0].row()
+        item = self.table.item(row, 0)
+        if item is None:
+            return
+        c_idx = item.data(Qt.ItemDataRole.UserRole)
+        if c_idx is not None:
+            self.highlight_atom_and_connections(c_idx)
+
+    def on_mol_atom_clicked(self, atom_idx: int):
+        if not self.mol or atom_idx >= self.mol.GetNumAtoms():
+            return
+        atom = self.mol.GetAtomWithIdx(atom_idx)
+        c_idx = atom_idx if atom.GetSymbol() == 'C' else [n.GetIdx() for n in atom.GetNeighbors() if n.GetSymbol() == 'C'][0]
+
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 0)
+            if item and item.data(Qt.ItemDataRole.UserRole) == c_idx:
+                self.table.selectRow(r)
+                self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                break
+        self.highlight_atom_and_connections(c_idx)
+
+    def on_graph_node_clicked(self, node_id: str):
+        c_idx = None
+        if node_id.startswith("C_"):
+            c_idx = int(node_id.replace("C_", ""))
+        elif node_id.startswith("DFT_"):
+            c_idx = int(node_id.replace("DFT_", ""))
+        elif node_id.startswith("EXP_"):
+            for r in range(self.table.rowCount()):
+                combo = self.table.cellWidget(r, 3)
+                if combo and combo.currentData() == node_id:
+                    self.table.selectRow(r)
+                    item_0 = self.table.item(r, 0)
+                    if item_0:
+                        self.table.scrollToItem(item_0, QAbstractItemView.ScrollHint.PositionAtCenter)
+                    break
+            return
+
+        if c_idx is not None:
+            self.highlight_atom_and_connections(c_idx)
+            for r in range(self.table.rowCount()):
+                item = self.table.item(r, 0)
+                if item and item.data(Qt.ItemDataRole.UserRole) == c_idx:
+                    self.table.selectRow(r)
+                    self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                    break
+
     def export_ai_data(self):
-        """Сохранение полного пакета данных для дальнейшего анализа нейросетью."""
         if not self.graphs_data:
-            QMessageBox.warning(self, "Внимание", "Нет данных для экспорта. Сначала выполните построение графов.")
+            QMessageBox.warning(self, "Внимание", "Нет данных для экспорта.")
             return
 
         xyz_nodes = self.graphs_data.get("xyz_graph", {}).get("nodes", {})
@@ -317,7 +464,6 @@ class MatcherTab(QWidget):
         exp_nodes = self.graphs_data.get("exp_graph", {}).get("nodes", {})
         exp_edges = self.graphs_data.get("exp_graph", {}).get("edges", [])
 
-        # Собираем актуальные сопоставления из таблицы
         current_matches = []
         assigned_dft = set()
         assigned_exp = set()
@@ -365,14 +511,12 @@ class MatcherTab(QWidget):
 
             current_matches.append(match_info)
 
-        # Формируем список оставшихся несоотнесенных узлов
         unassigned_dft = []
         for d_node, d_info in xyz_nodes.items():
             if d_node not in assigned_dft:
                 c_idx = int(d_node.split('_')[1])
                 d_d = dft_nodes.get(f"DFT_{c_idx}", {})
 
-                # Поиск спиновых соседей по DFT
                 spin_neighbors = []
                 for e in dft_edges:
                     u = e[0].replace("DFT_", "C_")
@@ -394,7 +538,6 @@ class MatcherTab(QWidget):
         unassigned_exp = []
         for e_node, e_info in exp_nodes.items():
             if e_node not in assigned_exp:
-                # Поиск соседей по COSY
                 cosy_neighbors = []
                 for e in exp_edges:
                     u, v = e[0], e[1]
@@ -433,93 +576,11 @@ class MatcherTab(QWidget):
             "raw_graphs": self.graphs_data
         }
 
-        path, _ = QFileDialog.getSaveFileName(self, "Сохранить данные для ИИ", "nmr_ai_analysis_data.json",
-                                              "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить данные для ИИ", "nmr_ai_analysis_data.json", "JSON (*.json)")
         if path:
             try:
                 with open(path, 'w', encoding='utf-8') as f:
                     json.dump(ai_payload, f, ensure_ascii=False, indent=2)
-                QMessageBox.information(
-                    self, "Успех", f"Данные для анализа ИИ сохранены в:\n{path}\n\nФайл готов к загрузке в диалог с ИИ!"
-                )
+                QMessageBox.information(self, "Успех", f"Данные сохранены в:\n{path}")
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось записать файл:\n{e}")
-
-    def _render_mol(self, highlights: Optional[List[int]] = None):
-        if not self.mol:
-            return
-        try:
-            d2d = rdMolDraw2D.MolDraw2DCairo(500, 350)
-            opts = d2d.drawOptions()
-            opts.addAtomIndices = True
-            opts.highlightBondWidthMultiplier = 3
-            if highlights:
-                d2d.DrawMolecule(self.mol, highlightAtoms=highlights,
-                                 highlightAtomColors={i: (1.0, 0.40, 0.0) for i in highlights})
-            else:
-                d2d.DrawMolecule(self.mol)
-            d2d.FinishDrawing()
-            pix = QPixmap()
-            pix.loadFromData(d2d.GetDrawingText())
-            self.mol_view.setPixmap(pix)
-            self.mol_view.atom_coords.clear()
-            for atom in self.mol.GetAtoms():
-                pt = d2d.GetDrawCoords(atom.GetIdx())
-                self.mol_view.atom_coords[atom.GetIdx()] = (pt.x, pt.y)
-        except Exception as e:
-            self.mol_view.setText(f"Ошибка рендера RDKit: {e}")
-
-    def on_table_row_selected(self):
-        items = self.table.selectedItems()
-        if not items:
-            return
-        row = items[0].row()
-        item = self.table.item(row, 0)
-        if item is None:
-            return
-        c_idx = item.data(Qt.ItemDataRole.UserRole)
-        if c_idx is not None and self.mol and c_idx < self.mol.GetNumAtoms():
-            atom = self.mol.GetAtomWithIdx(c_idx)
-            h_indices = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'H']
-            self._render_mol(highlights=[c_idx] + h_indices)
-
-    def on_mol_atom_clicked(self, atom_idx: int):
-        if not self.mol or atom_idx >= self.mol.GetNumAtoms():
-            return
-        atom = self.mol.GetAtomWithIdx(atom_idx)
-        c_idx = atom_idx if atom.GetSymbol() == 'C' else \
-        [n.GetIdx() for n in atom.GetNeighbors() if n.GetSymbol() == 'C'][0]
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, 0)
-            if item and item.data(Qt.ItemDataRole.UserRole) == c_idx:
-                self.table.selectRow(r)
-                self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
-                break
-
-    def on_graph_node_clicked(self, node_id: str):
-        c_idx = None
-        if node_id.startswith("C_"):
-            c_idx = int(node_id.replace("C_", ""))
-        elif node_id.startswith("DFT_"):
-            c_idx = int(node_id.replace("DFT_", ""))
-        elif node_id.startswith("EXP_"):
-            for r in range(self.table.rowCount()):
-                combo = self.table.cellWidget(r, 3)
-                if combo and combo.currentData() == node_id:
-                    self.table.selectRow(r)
-                    item_0 = self.table.item(r, 0)
-                    if item_0:
-                        self.table.scrollToItem(item_0, QAbstractItemView.ScrollHint.PositionAtCenter)
-                    break
-            return
-
-        if c_idx is not None:
-            if self.mol and c_idx < self.mol.GetNumAtoms():
-                atom = self.mol.GetAtomWithIdx(c_idx)
-                self._render_mol([c_idx] + [n.GetIdx() for n in atom.GetNeighbors() if n.GetSymbol() == 'H'])
-            for r in range(self.table.rowCount()):
-                item = self.table.item(r, 0)
-                if item and item.data(Qt.ItemDataRole.UserRole) == c_idx:
-                    self.table.selectRow(r)
-                    self.table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
-                    break

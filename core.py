@@ -4,7 +4,7 @@ import math
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-from PyQt6.QtWidgets import QLabel, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsObject
+from PyQt6.QtWidgets import QLabel, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsObject, QComboBox, QListView
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPainter, QPen, QBrush, QFont, QColor, QRadialGradient
 
@@ -25,6 +25,60 @@ NODE_COLORS = {
     'CH3': '#66BB6A',
     'CH4': '#AB47BC'
 }
+
+
+class ScrollableListView(QListView):
+    """Список, который гарантированно прокручивается колесом мыши в QTableWidget."""
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta != 0:
+            sb = self.verticalScrollBar()
+            if sb and sb.isVisible():
+                step = -1 if delta > 0 else 1
+                sb.setValue(sb.value() + step)
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+
+class ScrollableComboBox(QComboBox):
+    """Выпадающий список с гарантированной прокруткой и широким удобным скроллбаром."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        lv = ScrollableListView(self)
+        self.setView(lv)
+        self.setMaxVisibleItems(7)
+        self.setStyleSheet("""
+            QComboBox {
+                combobox-popup: 0;
+                padding: 3px 6px;
+                border: 1px solid #B0BEC5;
+                border-radius: 3px;
+                background-color: white;
+            }
+            QComboBox QAbstractItemView {
+                border: 1px solid #78909C;
+                background-color: white;
+                selection-background-color: #BBDEFB;
+                selection-color: black;
+                outline: 0;
+            }
+            QScrollBar:vertical {
+                border: 1px solid #CFD8DC;
+                background: #ECEFF1;
+                width: 16px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background: #90A4AE;
+                min-height: 25px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #607D8B;
+            }
+        """)
 
 
 class InteractiveMolLabel(QLabel):
@@ -166,10 +220,11 @@ class GraphEdgeItem(QGraphicsItem):
 
 def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150) -> Dict[str, np.ndarray]:
     n = len(nodes)
-    if n == 0: return {}
-    if n == 1: return {nodes[0]: np.array([0.0, 0.0])}
-    pos = {node: np.array([math.cos(2.0 * math.pi * i / n) * 4.5, math.sin(2.0 * math.pi * i / n) * 4.5]) for i, node in
-           enumerate(nodes)}
+    if n == 0:
+        return {}
+    if n == 1:
+        return {nodes[0]: np.array([0.0, 0.0])}
+    pos = {node: np.array([math.cos(2.0 * math.pi * i / n) * 4.5, math.sin(2.0 * math.pi * i / n) * 4.5]) for i, node in enumerate(nodes)}
     adj = {u: set() for u in nodes}
     for edge in edges:
         u, v = edge[0], edge[1]
@@ -197,7 +252,8 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
                 if u < v:
                     delta = pos[u] - pos[v]
                     dist = np.linalg.norm(delta)
-                    if dist < 1e-4: continue
+                    if dist < 1e-4:
+                        continue
                     attr = (dist * dist) / k
                     disp[u] -= (delta / dist) * attr
                     disp[v] += (delta / dist) * attr
@@ -232,7 +288,8 @@ class InteractiveGraphCanvas(QGraphicsView):
 
     def set_graph(self, nodes_dict: Dict[str, dict], edges_list: list, has_weights: bool = False):
         self.scene.clear()
-        if not nodes_dict: return
+        if not nodes_dict:
+            return
         node_keys = list(nodes_dict.keys())
         edge_pairs = [(e[0], e[1]) if has_weights else e for e in edges_list]
         pos = calculate_spring_layout(node_keys, edge_pairs)
@@ -268,7 +325,8 @@ class DataParsers:
                         coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
                     except ValueError:
                         pass
-        if not symbols: return None, {}, []
+        if not symbols:
+            return None, {}, []
 
         mol = Chem.RWMol()
         for sym in symbols:
@@ -296,8 +354,13 @@ class DataParsers:
             if atom.GetSymbol() == 'C':
                 h_nbrs = [n.GetIdx() for n in atom.GetNeighbors() if n.GetSymbol() == 'H']
                 if h_nbrs:
-                    rd_nodes[f"C_{atom.GetIdx()}"] = {"label": f"C {atom.GetIdx()}\n(CH{len(h_nbrs)})",
-                                                      "type": f"CH{len(h_nbrs)}", "h_count": len(h_nbrs)}
+                    # Нормализуем: CH вместо CH1, чтобы всегда совпадало с экспериментом
+                    t_name = "CH" if len(h_nbrs) == 1 else f"CH{len(h_nbrs)}"
+                    rd_nodes[f"C_{atom.GetIdx()}"] = {
+                        "label": f"C {atom.GetIdx()}\n({t_name})",
+                        "type": t_name,
+                        "h_count": len(h_nbrs)
+                    }
 
         topo_dist = Chem.GetDistanceMatrix(mol)
         c_idx = [int(k.split('_')[1]) for k in rd_nodes.keys()]
@@ -336,7 +399,8 @@ class DataParsers:
         atoms, j_matrix, col_headers = {}, {}, []
         for line in dft_text.splitlines():
             tokens = line.split()
-            if not tokens: continue
+            if not tokens:
+                continue
             if len(tokens) >= 4 and tokens[0].isdigit() and tokens[1].isalpha() and tokens[2].isdigit():
                 col_headers = [int(tokens[i]) for i in range(0, len(tokens), 2)]
                 continue
@@ -354,12 +418,22 @@ class DataParsers:
         for (i, j), val in j_matrix.items():
             if abs(val) > 110:
                 if atoms.get(i) == 'C' and atoms.get(j) == 'H':
-                    if j not in c_nodes[i]: c_nodes[i].append(j)
+                    if j not in c_nodes[i]:
+                        c_nodes[i].append(j)
                 elif atoms.get(j) == 'C' and atoms.get(i) == 'H':
-                    if i not in c_nodes[j]: c_nodes[j].append(i)
+                    if i not in c_nodes[j]:
+                        c_nodes[j].append(i)
 
-        dft_nodes = {f"DFT_{i}": {"label": f"C {i}\nH:[{','.join(map(str, sorted(h)))}]", "type": f"CH{len(h)}",
-                                  "h_count": len(h), "H": h} for i, h in c_nodes.items() if h}
+        dft_nodes = {}
+        for i, h in c_nodes.items():
+            if h:
+                t_name = "CH" if len(h) == 1 else f"CH{len(h)}"
+                dft_nodes[f"DFT_{i}"] = {
+                    "label": f"C {i}\nH:[{','.join(map(str, sorted(h)))}]",
+                    "type": t_name,
+                    "h_count": len(h),
+                    "H": h
+                }
 
         max_j = {}
         for (i, j), val in j_matrix.items():
@@ -373,13 +447,10 @@ class DataParsers:
         return dft_nodes, [(u, v, jv) for (u, v), jv in max_j.items() if jv >= 1.4]
 
     @staticmethod
-    def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float,
-                  ignore_artifacts: bool):
-        # 1. 1D 1H: Считываем параметры пиков
+    def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float, ignore_artifacts: bool):
+        # 1. 1D 1H
         peaks_1d = []
-        for m in re.finditer(
-                r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)',
-                exp1d_text):
+        for m in re.finditer(r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)', exp1d_text):
             s1 = float(m.group('shift'))
             s2 = float(m.group('shift2')) if m.group('shift2') else s1
             mult = m.group('mult').lower()
@@ -424,11 +495,13 @@ class DataParsers:
         ch2_groups = []
 
         for i in range(len(neg_peaks)):
-            if i in paired_neg: continue
+            if i in paired_neg:
+                continue
             best_j = None
             min_c_diff = c_tol
             for j in range(i + 1, len(neg_peaks)):
-                if j in paired_neg: continue
+                if j in paired_neg:
+                    continue
                 c_diff = abs(neg_peaks[i]['c'] - neg_peaks[j]['c'])
                 h_diff = abs(neg_peaks[i]['h'] - neg_peaks[j]['h'])
                 if c_diff <= min_c_diff and h_diff >= 0.04:
@@ -452,8 +525,10 @@ class DataParsers:
                 matched_p = min(peaks_1d, key=lambda p: abs(p['shift'] - h), default=None)
                 if matched_p and abs(matched_p['shift'] - h) < 0.08:
                     n_j.extend(matched_p['j_vals'])
-                    if matched_p['is_s']: is_s = True
-                    if matched_p['is_m']: is_m = True
+                    if matched_p['is_s']:
+                        is_s = True
+                    if matched_p['is_m']:
+                        is_m = True
                     total_integ += matched_p['integ']
                 else:
                     total_integ += 1
@@ -488,8 +563,7 @@ class DataParsers:
             is_m = matched_p['is_m'] if matched_p else False
             n_j = matched_p['j_vals'] if matched_p else []
 
-            # ИСПРАВЛЕНИЕ: CH3 строго синглет или характеристичная метокси-группа!
-            # Сложный мультиплет с перекрытием (is_m) ни при каких условиях не считается CH3
+            # CH3: строго синглет при 3.87 или чистый синглет с 3H (перекрытый мультиплет не может быть CH3)
             is_ch3 = (54.0 <= p['c'] <= 57.0 and 3.75 <= p['h'] <= 4.0) or (integ >= 3 and is_s and not is_m)
             g_type = "CH3" if is_ch3 else "CH"
 
@@ -513,7 +587,8 @@ class DataParsers:
         cosy = []
         for line in cosy_text.splitlines():
             toks = line.strip().split()
-            if not toks or ("artifact" in line.lower() and ignore_artifacts): continue
+            if not toks or ("artifact" in line.lower() and ignore_artifacts):
+                continue
             try:
                 off = 1 if toks[0].isdigit() else 0
                 f1, f2 = float(toks[off]), float(toks[off + 1])
@@ -530,11 +605,11 @@ class DataParsers:
         node_keys = list(exp_nodes.keys())
         for i, u in enumerate(node_keys):
             for v in node_keys[i + 1:]:
-                if exp_nodes[u]['is_singlet'] or exp_nodes[v]['is_singlet']: continue
-                c_area = max([a for f1, f2, a in cosy if
-                              (match_h(f1) == u and match_h(f2) == v) or (match_h(f1) == v and match_h(f2) == u)],
-                             default=0.0)
-                if c_area == 0.0: continue
+                if exp_nodes[u]['is_singlet'] or exp_nodes[v]['is_singlet']:
+                    continue
+                c_area = max([a for f1, f2, a in cosy if (match_h(f1) == u and match_h(f2) == v) or (match_h(f1) == v and match_h(f2) == u)], default=0.0)
+                if c_area == 0.0:
+                    continue
 
                 uj, vj = exp_nodes[u]['j_vals'], exp_nodes[v]['j_vals']
                 if uj and vj:
