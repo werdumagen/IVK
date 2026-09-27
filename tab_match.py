@@ -2,6 +2,7 @@
 import sys
 import json
 import traceback
+import numpy as np
 from typing import Optional, List, Dict
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
