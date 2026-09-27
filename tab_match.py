@@ -25,6 +25,28 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = handle_exception
 
 
+def get_exp_multiplicity(ev: dict) -> str:
+    """Возвращает точную экспериментальную мультиплетность или аккуратно выводит ее из J/типа."""
+    m = ev.get('mult')
+    if m:
+        return str(m)
+    if ev.get('is_singlet'):
+        return 's'
+    if ev.get('is_multiplet'):
+        return 'm'
+    j_list = ev.get('j_vals', [])
+    n_j = len(j_list)
+    if n_j == 0:
+        return 's' if ev.get('type') == 'CH3' else 'm'
+    if n_j == 1:
+        return 'd'
+    if n_j == 2:
+        return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
+    if n_j == 3:
+        return 'ddd'
+    return 'm'
+
+
 class MatcherTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -80,7 +102,7 @@ class MatcherTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels([
-            "Статус", "DFT Узел", "Расчет DFT (δC/δH)", "Соотнесение (Exp Узел)", "Факт Exp (δC/δH)", "Обоснование"
+            "Статус", "DFT Узел", "Расчет DFT (δC/δH, J-мульт)", "Соотнесение (Exp Узел)", "Факт Exp (δC/δH, мульт)", "Обоснование"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -128,6 +150,8 @@ class MatcherTab(QWidget):
                 return 'd'
             if n_j == 2:
                 return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
+            if n_j == 3:
+                return 'ddd'
             return 'm'
 
         def check_shifts_valid(d_node_key: str, e_node_key: str, c_lim: float = 15.0, h_lim: float = 0.5) -> bool:
@@ -211,7 +235,7 @@ class MatcherTab(QWidget):
         self.table.setRowCount(0)
         c_green, c_gray = QColor(220, 255, 220), QColor(245, 245, 245)
 
-        # Естественная сортировка всех экспериментальных узлов по их индексу
+        # Сортировка абсолютно всех экспериментальных узлов по порядковому номеру EXP_0 ... EXP_18
         def exp_sort_key(k: str) -> int:
             try:
                 return int(k.replace("EXP_", ""))
@@ -225,6 +249,7 @@ class MatcherTab(QWidget):
             self.table.insertRow(row)
             c_idx = int(d_node.split('_')[1])
             g_type = self._norm_type(xyz_nodes[d_node].get('type', 'CH'))
+            d_mult = get_dft_multiplicity(dft_node_j.get(d_node, []))
 
             dft_key = f"DFT_{c_idx}"
             d_data = dft_nodes.get(dft_key, {})
@@ -233,7 +258,7 @@ class MatcherTab(QWidget):
 
             c_s_txt = f"{c_shift_dft:.1f}" if c_shift_dft is not None else "—"
             h_s_txt = ', '.join(f'{h:.2f}' for h in h_shifts_dft if h is not None) if h_shifts_dft else "—"
-            dft_str = f"δC {c_s_txt} / δH {h_s_txt}"
+            dft_str = f"δC {c_s_txt} / δH {h_s_txt} ({d_mult})"
 
             item_status = QTableWidgetItem("Не соотнесено")
             item_dft = QTableWidgetItem(f"{d_node}")
@@ -255,13 +280,15 @@ class MatcherTab(QWidget):
             cb.blockSignals(True)
             cb.addItem("— Не выбрано —", userData=None)
 
-            # Добавляем ВСЕ экспериментальные ядра (от EXP_0 до последнего)
+            # В список добавляются ВСЕ экспериментальные ядра без исключения
             for ek in sorted_exp_keys:
                 ev = exp_nodes[ek]
                 e_t = self._norm_type(ev.get('type', 'CH'))
                 tag = "" if ev.get('is_complete', True) else " [1H]"
                 prefix = "★ " if e_t == g_type else "   "
-                cb.addItem(f"{prefix}{ek}{tag} ({e_t}, δC {ev.get('c', 0):.1f})", userData=ek)
+                h_txt = ', '.join(f'{h:.2f}' for h in ev.get('h_list', []))
+                e_mult = get_exp_multiplicity(ev)
+                cb.addItem(f"{prefix}{ek}{tag} ({e_t}, δC {ev.get('c', 0):.1f}, δH {h_txt}, {e_mult})", userData=ek)
 
             if d_node in anchors:
                 e_node, reason = anchors[d_node]
@@ -270,7 +297,9 @@ class MatcherTab(QWidget):
                     cb.setCurrentIndex(cb_idx)
 
                 ed = exp_nodes[e_node]
-                shift_str = f"δC {ed.get('c', 0):.2f} / δH {', '.join(f'{h:.2f}' for h in ed.get('h_list', []))}"
+                e_mult = get_exp_multiplicity(ed)
+                e_h_txt = ', '.join(f'{h:.2f}' for h in ed.get('h_list', []))
+                shift_str = f"δC {ed.get('c', 0):.2f} / δH {e_h_txt} ({e_mult})"
 
                 item_status.setText("Авто-Якорь")
                 item_exp_val.setText(shift_str)
@@ -304,7 +333,9 @@ class MatcherTab(QWidget):
             item_status.setText("Ручное")
             item_reason.setText("Выбрано пользователем")
             ed = self.graphs_data.get("exp_graph", {}).get("nodes", {}).get(e_node, {})
-            shift_str = f"δC {ed.get('c', 0):.2f} / δH {', '.join(f'{h:.2f}' for h in ed.get('h_list', []))}"
+            e_mult = get_exp_multiplicity(ed)
+            e_h_txt = ', '.join(f'{h:.2f}' for h in ed.get('h_list', []))
+            shift_str = f"δC {ed.get('c', 0):.2f} / δH {e_h_txt} ({e_mult})"
             item_exp_val.setText(shift_str)
             item_exp_val.setData(Qt.ItemDataRole.UserRole, e_node)
             item_exp_val.setToolTip(f"Кликните для перехода к {e_node} на графе")
@@ -323,7 +354,7 @@ class MatcherTab(QWidget):
                 it.setBackground(c_gray)
 
     def on_cell_clicked(self, row: int, column: int):
-        """Автозум на экспериментальном графе ТОЛЬКО при нажатии на столбец 'Факт Exp'."""
+        """Автозум на экспериментальном графе ТОЛЬКО при нажатии на столбец 'Факт Exp' (колонка 4)."""
         if column == 4:
             self.zoom_to_exp_node_at_row(row)
 
@@ -455,7 +486,7 @@ class MatcherTab(QWidget):
         self.highlight_atom_and_connections(c_idx)
 
     def on_graph_node_clicked(self, node_id: str):
-        """Обработка клика по ноду на графе: БЕЗ автозума, только подсветка и фокус в таблице."""
+        """Клик по вершине графа: БЕЗ автозума, только подсветка связей и прокрутка таблицы."""
         c_idx = None
         if node_id.startswith("C_"):
             c_idx = int(node_id.replace("C_", ""))
@@ -532,7 +563,8 @@ class MatcherTab(QWidget):
                     "c_shift": e_d.get("c"),
                     "h_shifts": e_d.get("h_list", []),
                     "j_vals": e_d.get("j_vals", []),
-                    "type": e_d.get("type")
+                    "type": e_d.get("type"),
+                    "mult": get_exp_multiplicity(e_d)
                 }
             else:
                 match_info["exp_actual"] = None
@@ -581,6 +613,7 @@ class MatcherTab(QWidget):
                     "c_shift_actual": e_info.get("c"),
                     "h_shifts_actual": e_info.get("h_list"),
                     "j_vals_actual": e_info.get("j_vals"),
+                    "mult": get_exp_multiplicity(e_info),
                     "is_singlet": e_info.get("is_singlet"),
                     "is_multiplet": e_info.get("is_multiplet"),
                     "cosy_neighbors": cosy_neighbors

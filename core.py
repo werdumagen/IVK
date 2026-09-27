@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple, Optional
 
 from PyQt6.QtWidgets import (QLabel, QGraphicsView, QGraphicsScene, QGraphicsItem,
                              QGraphicsObject, QComboBox, QListView, QAbstractItemView)
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QEvent
 from PyQt6.QtGui import QPainter, QPen, QBrush, QFont, QColor, QRadialGradient
 
 from rdkit import Chem
@@ -28,34 +28,21 @@ NODE_COLORS = {
 }
 
 
-class ScrollableListView(QListView):
-    """Список с гарантированной поштучной прокруткой колесом мыши."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
-
-    def wheelEvent(self, event):
-        delta = event.angleDelta().y()
-        if delta != 0:
-            sb = self.verticalScrollBar()
-            if sb and sb.isVisible():
-                step = -2 if delta > 0 else 2
-                sb.setValue(sb.value() + step)
-                event.accept()
-                return
-        super().wheelEvent(event)
-
-
 class ScrollableComboBox(QComboBox):
-    """Выпадающий список с широким скроллбаром и плавной прокруткой."""
+    """Выпадающий список со свободным скроллом и отображением полного набора ядер."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        lv = ScrollableListView(self)
-        self.setView(lv)
-        self.setMaxVisibleItems(10)
+        view = QListView(self)
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+        self.setView(view)
+        self.setMaxVisibleItems(25)  # Показывает весь перечень из 19 ядер без искусственной обрезки
+        view.viewport().installEventFilter(self)
+
         self.setStyleSheet("""
             QComboBox {
+                combobox-popup: 0;
                 padding: 3px 6px;
                 border: 1px solid #B0BEC5;
                 border-radius: 3px;
@@ -66,7 +53,7 @@ class ScrollableComboBox(QComboBox):
                 background-color: white;
                 selection-background-color: #BBDEFB;
                 selection-color: black;
-                min-width: 190px;
+                min-width: 320px;
             }
             QScrollBar:vertical {
                 border: 1px solid #CFD8DC;
@@ -83,6 +70,18 @@ class ScrollableComboBox(QComboBox):
                 background: #455A64;
             }
         """)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel:
+            view = self.view()
+            if view:
+                sb = view.verticalScrollBar()
+                if sb:
+                    delta = event.angleDelta().y()
+                    step = -2 if delta > 0 else 2
+                    sb.setValue(sb.value() + step)
+                    return True
+        return super().eventFilter(obj, event)
 
 
 class InteractiveMolLabel(QLabel):
@@ -316,7 +315,7 @@ class InteractiveGraphCanvas(QGraphicsView):
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def zoom_to_node(self, node_id: str, scale_factor: float = 1.35):
-        """Центрирует и масштабирует холст на выбранном узле графа."""
+        """Центрирует и масштабирует холст на выбранном узле графа (вызывается из таблицы)."""
         if hasattr(self, 'node_items') and node_id in self.node_items:
             item = self.node_items[node_id]
             self.resetTransform()
@@ -463,6 +462,7 @@ class DataParsers:
 
     @staticmethod
     def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float, ignore_artifacts: bool):
+        # 1. Считывание пиков 1D с сохранением точной мультиплетности
         peaks_1d = []
         for m in re.finditer(r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)', exp1d_text):
             s1 = float(m.group('shift'))
@@ -479,6 +479,7 @@ class DataParsers:
                 'is_m': mult == 'm'
             })
 
+        # 2. HSQC: знак фазы определяет CH2
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip().lower()
@@ -503,6 +504,7 @@ class DataParsers:
         exp_nodes = {}
         idx = 0
 
+        # А) CH2 группы
         paired_neg = set()
         ch2_groups = []
 
@@ -532,15 +534,16 @@ class DataParsers:
             h_raw = sorted([p['h'] for p in cl], reverse=True)
 
             n_j, is_s, is_m = [], False, False
+            mult_list = []
             total_integ = 0
             for h in h_raw:
                 matched_p = min(peaks_1d, key=lambda p: abs(p['shift'] - h), default=None)
                 if matched_p and abs(matched_p['shift'] - h) < 0.08:
                     n_j.extend(matched_p['j_vals'])
-                    if matched_p['is_s']:
-                        is_s = True
-                    if matched_p['is_m']:
-                        is_m = True
+                    if matched_p['is_s']: is_s = True
+                    if matched_p['is_m']: is_m = True
+                    if matched_p.get('mult'):
+                        mult_list.append(matched_p['mult'])
                     total_integ += matched_p['integ']
                 else:
                     total_integ += 1
@@ -555,6 +558,8 @@ class DataParsers:
                 h_list = h_raw
                 is_complete = False
 
+            mult_str = ", ".join(mult_list) if mult_list else ('s' if is_s else ('m' if is_m else 'm'))
+
             exp_nodes[f"EXP_{idx}"] = {
                 'c': round(c_mean, 2),
                 'h_list': h_list,
@@ -562,11 +567,13 @@ class DataParsers:
                 'is_singlet': is_s,
                 'is_multiplet': is_m,
                 'type': 'CH2',
+                'mult': mult_str,
                 'is_complete': is_complete,
                 'integ': len(h_list)
             }
             idx += 1
 
+        # Б) CH и CH3 группы
         for p in pos_peaks:
             matched_p = min(peaks_1d, key=lambda x: abs(x['shift'] - p['h']), default=None)
             integ = matched_p['integ'] if (matched_p and abs(matched_p['shift'] - p['h']) < 0.08) else 1
@@ -576,6 +583,7 @@ class DataParsers:
 
             is_ch3 = (54.0 <= p['c'] <= 57.0 and 3.75 <= p['h'] <= 4.0) or (integ >= 3 and is_s and not is_m)
             g_type = "CH3" if is_ch3 else "CH"
+            mult_str = 's' if is_ch3 else (matched_p['mult'] if (matched_p and matched_p.get('mult')) else ('s' if is_s else ('m' if is_m else 'm')))
 
             exp_nodes[f"EXP_{idx}"] = {
                 'c': round(p['c'], 2),
@@ -584,6 +592,7 @@ class DataParsers:
                 'is_singlet': is_s or is_ch3,
                 'is_multiplet': is_m,
                 'type': g_type,
+                'mult': mult_str,
                 'is_complete': True,
                 'integ': 3 if is_ch3 else 1
             }
@@ -593,6 +602,7 @@ class DataParsers:
             h_str = ", ".join([f"{h:.2f}" for h in v['h_list']])
             exp_nodes[k]['label'] = f"{h_str}\n{v['c']:.1f} ({v['type']})"
 
+        # 3. COSY кросс-пики
         cosy = []
         for line in cosy_text.splitlines():
             toks = line.strip().split()
