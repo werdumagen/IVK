@@ -1,7 +1,10 @@
 import sys
+import os
 import re
 import math
 import json
+import subprocess
+from datetime import datetime
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
@@ -31,16 +34,13 @@ COV_RADII = {
 }
 
 NODE_COLORS = {
-    'CH': '#FFA726',    # Тёплый оранжевый
-    'CH2': '#42A5F5',   # Небесно-синий
-    'CH3': '#66BB6A',   # Пастельно-зеленый
+    'CH': '#FFA726',
+    'CH1': '#FFA726',
+    'CH2': '#42A5F5',
+    'CH3': '#66BB6A',
     'CH4': '#AB47BC'
 }
 
-
-# ==========================================================
-#      ИНТЕРАКТИВНЫЙ 2D РЕНДЕР МОЛЕКУЛЫ (RDKit)
-# ==========================================================
 
 class InteractiveMolLabel(QLabel):
     atomClicked = pyqtSignal(int)
@@ -67,10 +67,6 @@ class InteractiveMolLabel(QLabel):
         if closest_atom != -1:
             self.atomClicked.emit(closest_atom)
 
-
-# ==========================================================
-#     КАСТОМНЫЙ ГРАФОВЫЙ ДВИЖОК (QGraphicsView / QPainter)
-# ==========================================================
 
 class GraphNodeItem(QGraphicsObject):
     clicked = pyqtSignal(str)
@@ -244,10 +240,6 @@ class InteractiveGraphCanvas(QGraphicsView):
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
 
-# ==========================================================
-#     АЛГОРИТМ РАСПОЛОЖЕНИЯ УЗЛОВ (Fruchterman-Reingold)
-# ==========================================================
-
 def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150) -> Dict[str, np.ndarray]:
     n = len(nodes)
     if n == 0:
@@ -311,10 +303,6 @@ def calculate_spring_layout(nodes: List[str], edges: list, iterations: int = 150
     return pos
 
 
-# ==========================================================
-#                  ПАРСЕРЫ ДАННЫХ
-# ==========================================================
-
 class DataParsers:
     @staticmethod
     def parse_xyz(xyz_text: str) -> Tuple[Optional[Chem.Mol], Dict[str, dict], List[Tuple[str, str]]]:
@@ -325,9 +313,8 @@ class DataParsers:
                 m = re.match(r'^([A-Za-z]{1,2})$', parts[0])
                 if m:
                     try:
-                        x, y, z = float(parts[1]), float(parts[2]), float(parts[3])
                         symbols.append(m.group(1).capitalize())
-                        coords.append([x, y, z])
+                        coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
                     except ValueError:
                         continue
 
@@ -460,7 +447,6 @@ class DataParsers:
         j_tol: float = 0.95,
         ignore_artifacts: bool = True
     ) -> Tuple[Dict[str, dict], List[Tuple[str, str, float]]]:
-        # 1. 1D мультиплеты и константы J
         peaks_1d = []
         item_re = re.compile(
             r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*'
@@ -486,7 +472,6 @@ class DataParsers:
                 'integ': integ
             })
 
-        # 2. HSQC фазочувствительный парсинг
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip()
@@ -520,7 +505,6 @@ class DataParsers:
                 except (ValueError, IndexError):
                     pass
 
-        # 3. Схлопывание диастереотопных пар CH2
         neg_peaks = [p for p in hsqc_raw if p['is_neg']]
         pos_peaks = [p for p in hsqc_raw if not p['is_neg']]
 
@@ -549,7 +533,6 @@ class DataParsers:
         exp_nodes = {}
         node_idx = 0
 
-        # CH2 узлы (ровно 7 штук)
         for cl in ch2_clusters:
             node_id = f"EXP_{node_idx}"
             node_idx += 1
@@ -582,7 +565,6 @@ class DataParsers:
                 'label': lbl
             }
 
-        # CH и CH3 узлы (11 CH + 1 CH3)
         for p in pos_peaks:
             node_id = f"EXP_{node_idx}"
             node_idx += 1
@@ -624,7 +606,6 @@ class DataParsers:
                 'label': lbl
             }
 
-        # 4. COSY кросс-пики
         cosy_pairs = []
         for line in cosy_text.splitlines():
             line_str = line.strip()
@@ -660,7 +641,6 @@ class DataParsers:
                         best_k = k
             return best_k
 
-        # 5. Строгое логическое правило (COSY ∧ 1D J-Match) с защитой от овер-линкинга
         edges_dict = {}
         node_keys = list(exp_nodes.keys())
         candidate_edges = []
@@ -669,11 +649,9 @@ class DataParsers:
             for j in range(i + 1, len(node_keys)):
                 u, v = node_keys[i], node_keys[j]
 
-                # 1. Синглеты строго изолированы
                 if exp_nodes[u].get('is_singlet') or exp_nodes[v].get('is_singlet'):
                     continue
 
-                # 2. Поиск кросс-пика в COSY
                 cosy_area = 0.0
                 for f1, f2, area in cosy_pairs:
                     if (match_shift_to_node(f1) == u and match_shift_to_node(f2) == v) or \
@@ -689,7 +667,6 @@ class DataParsers:
                 v_is_m = exp_nodes[v].get('is_multiplet', False)
 
                 shared_j = None
-                # Если у обоих есть J -> строгое численное совпадение
                 if u_j and v_j:
                     min_diff = j_tol
                     for ju in u_j:
@@ -700,7 +677,6 @@ class DataParsers:
                                 shared_j = round((ju + jv) / 2.0, 1)
 
                     if shared_j is not None:
-                        # Защита от связывания пиридина с бензолом по 1.6 Гц
                         is_u_pyr = (exp_nodes[u]['c'] > 118.0 and exp_nodes[u]['h_list'][0] > 7.65)
                         is_v_pyr = (exp_nodes[v]['c'] > 118.0 and exp_nodes[v]['h_list'][0] > 7.65)
                         if (is_u_pyr and not is_v_pyr) or (is_v_pyr and not is_u_pyr):
@@ -708,7 +684,6 @@ class DataParsers:
 
                         candidate_edges.append((cosy_area, u, v, shared_j))
 
-                # Если один из узлов - мультиплет 'm' -> требуем сильный COSY (area >= 1.0)
                 elif (u_is_m or v_is_m) and cosy_area >= 1.0:
                     val = 7.0
                     if u_j:
@@ -717,10 +692,8 @@ class DataParsers:
                         val = min(v_j)
                     candidate_edges.append((cosy_area, u, v, val))
 
-        # Сортируем кандидатов по достоверности (площади COSY)
         candidate_edges.sort(key=lambda x: x[0], reverse=True)
 
-        # Ограничение валентности: CH2 не может иметь больше 2 соседей
         node_degrees = {k: 0 for k in exp_nodes}
         for area, u, v, j_val in candidate_edges:
             max_deg_u = 2 if exp_nodes[u]['type'] == 'CH2' else 3
@@ -737,10 +710,6 @@ class DataParsers:
         return exp_nodes, final_edges
 
 
-# ==========================================================
-#                   ГЛАВНОЕ ОКНО ПРИЛОЖЕНИЯ
-# ==========================================================
-
 class GraphVisualizerApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -755,7 +724,6 @@ class GraphVisualizerApp(QMainWindow):
         layout = QHBoxLayout(main_w)
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # ---------------- ЛЕВАЯ ПАНЕЛЬ ----------------
         left_w = QWidget()
         l_layout = QVBoxLayout(left_w)
         l_layout.setContentsMargins(5, 5, 5, 5)
@@ -771,7 +739,6 @@ class GraphVisualizerApp(QMainWindow):
 
         self.input_tabs = QTabWidget()
 
-        # Tab 1: XYZ
         tab_xyz = QWidget()
         t1_l = QVBoxLayout(tab_xyz)
         self.txt_xyz = QTextEdit()
@@ -779,7 +746,6 @@ class GraphVisualizerApp(QMainWindow):
         t1_l.addWidget(self.txt_xyz)
         self.input_tabs.addTab(tab_xyz, "1. XYZ")
 
-        # Tab 2: DFT
         tab_dft = QWidget()
         t2_l = QVBoxLayout(tab_dft)
         self.txt_dft = QTextEdit()
@@ -787,7 +753,6 @@ class GraphVisualizerApp(QMainWindow):
         t2_l.addWidget(self.txt_dft)
         self.input_tabs.addTab(tab_dft, "2. DFT")
 
-        # Tab 3: Эксперимент
         tab_exp = QWidget()
         t3_l = QVBoxLayout(tab_exp)
 
@@ -843,21 +808,22 @@ class GraphVisualizerApp(QMainWindow):
         self.btn_plot.clicked.connect(self.plot_all)
         l_layout.addWidget(self.btn_plot)
 
-        self.btn_export = QPushButton("📤 Экспорт графов для ИИ (JSON)")
-        self.btn_export.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 7px;")
-        self.btn_export.clicked.connect(self.export_graphs)
+        # Кнопка экспорта и запуска внешнего скрипта matcher_gui.py
+        self.btn_export = QPushButton("📤 Экспорт графов (Auto-Save JSON) + Запуск Сопоставления")
+        self.btn_export.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 9px; font-size: 13px;")
+        self.btn_export.clicked.connect(self.export_and_launch_matching)
         l_layout.addWidget(self.btn_export)
 
         main_splitter.addWidget(left_w)
 
-        # ---------------- ПРАВАЯ ПАНЕЛЬ ----------------
+        # Правая панель
         right_w = QWidget()
         r_layout = QVBoxLayout(right_w)
         r_layout.setContentsMargins(5, 5, 5, 5)
 
         right_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        struct_group = QGroupBox("2D Структура молекулы (Клик по узлу графа подсветит углерод и все его водороды)")
+        struct_group = QGroupBox("2D Структура молекулы")
         struct_l = QVBoxLayout(struct_group)
         self.mol_view = InteractiveMolLabel("Молекула отрисуется после ввода координат XYZ")
         self.mol_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -907,7 +873,7 @@ class GraphVisualizerApp(QMainWindow):
             d2d = rdMolDraw2D.MolDraw2DCairo(w, h)
             opts = d2d.drawOptions()
             opts.addAtomIndices = True
-            opts.highlightBondWidthMultiplier = 3.5
+            opts.highlightBondWidthMultiplier = 3  # Исправлено: строго целое число int
 
             if highlights:
                 colors = {idx: (1.0, 0.40, 0.0) for idx in highlights}
@@ -930,6 +896,7 @@ class GraphVisualizerApp(QMainWindow):
             try:
                 d2d_svg = rdMolDraw2D.MolDraw2DSVG(w, h)
                 d2d_svg.drawOptions().addAtomIndices = True
+                d2d_svg.drawOptions().highlightBondWidthMultiplier = 3
                 if highlights:
                     colors = {idx: (1.0, 0.40, 0.0) for idx in highlights}
                     d2d_svg.DrawMolecule(self.mol, highlightAtoms=highlights, highlightAtomColors=colors)
@@ -941,7 +908,6 @@ class GraphVisualizerApp(QMainWindow):
                 renderer = QSvgRenderer(svg_bytes)
                 image = QImage(w, h, QImage.Format.Format_ARGB32)
                 image.fill(Qt.GlobalColor.white)
-                from PyQt6.QtGui import QPainter
                 painter = QPainter(image)
                 renderer.render(painter)
                 painter.end()
@@ -1018,6 +984,7 @@ class GraphVisualizerApp(QMainWindow):
             self._populate_table(exp_nodes)
 
             self.last_graphs = {
+                "raw_xyz": xyz_t,
                 "xyz_graph": {"nodes": xyz_nodes, "edges": [list(e) for e in xyz_edges]},
                 "dft_graph": {"nodes": dft_nodes, "edges": [list(e) for e in dft_edges]},
                 "exp_graph": {"nodes": exp_nodes, "edges": [list(e) for e in exp_edges]}
@@ -1025,6 +992,36 @@ class GraphVisualizerApp(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка построения", f"Сбой обработки данных:\n{e}")
+
+    def export_and_launch_matching(self):
+        if not self.last_graphs:
+            self.plot_all()
+            if not self.last_graphs:
+                QMessageBox.warning(self, "Внимание", "Сначала постройте графы кнопкой 'Построить графы'.")
+                return
+
+        # 1. Автоматическое сохранение в graph/<systemtime>.json
+        os.makedirs("graph", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filepath = os.path.join("graph", f"{timestamp}.json")
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(self.last_graphs, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось записать файл:\n{e}")
+            return
+
+        # 2. Запуск отдельного скрипта matcher_gui.py
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "matcher_gui.py")
+        if not os.path.exists(script_path):
+            # Если файл лежит в текущей директории
+            script_path = "matcher_gui.py"
+
+        try:
+            subprocess.Popen([sys.executable, script_path, filepath])
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка запуска", f"Не удалось запустить matcher_gui.py:\n{e}")
 
     def save_session(self):
         data = {
@@ -1068,17 +1065,6 @@ class GraphVisualizerApp(QMainWindow):
                     self.chk_artifacts.setChecked(settings["ignore_artifacts"])
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить файл:\n{e}")
-
-    def export_graphs(self):
-        if not self.last_graphs:
-            QMessageBox.warning(self, "Внимание", "Сначала постройте графы кнопкой 'Построить графы'.")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(self, "Экспорт графов для ИИ", "graphs_export_clean.json", "JSON Files (*.json)")
-        if path:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self.last_graphs, f, ensure_ascii=False, indent=2)
-            QMessageBox.information(self, "Успех", f"Очищенные графы экспортированы в {path}")
 
 
 if __name__ == "__main__":
