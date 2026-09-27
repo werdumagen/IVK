@@ -211,6 +211,15 @@ class MatcherTab(QWidget):
         self.table.setRowCount(0)
         c_green, c_gray = QColor(220, 255, 220), QColor(245, 245, 245)
 
+        # Естественная сортировка всех экспериментальных узлов по их индексу
+        def exp_sort_key(k: str) -> int:
+            try:
+                return int(k.replace("EXP_", ""))
+            except Exception:
+                return 999
+
+        sorted_exp_keys = sorted(exp_nodes.keys(), key=exp_sort_key)
+
         for d_node in sorted(xyz_nodes.keys(), key=lambda x: int(x.split('_')[1])):
             row = self.table.rowCount()
             self.table.insertRow(row)
@@ -246,10 +255,13 @@ class MatcherTab(QWidget):
             cb.blockSignals(True)
             cb.addItem("— Не выбрано —", userData=None)
 
-            for ek, ev in exp_nodes.items():
-                if self._norm_type(ev.get('type')) == g_type:
-                    tag = "" if ev.get('is_complete', True) else " [1H]"
-                    cb.addItem(f"{ek}{tag} (δC {ev.get('c', 0):.1f})", userData=ek)
+            # Добавляем ВСЕ экспериментальные ядра (от EXP_0 до последнего)
+            for ek in sorted_exp_keys:
+                ev = exp_nodes[ek]
+                e_t = self._norm_type(ev.get('type', 'CH'))
+                tag = "" if ev.get('is_complete', True) else " [1H]"
+                prefix = "★ " if e_t == g_type else "   "
+                cb.addItem(f"{prefix}{ek}{tag} ({e_t}, δC {ev.get('c', 0):.1f})", userData=ek)
 
             if d_node in anchors:
                 e_node, reason = anchors[d_node]
@@ -311,7 +323,7 @@ class MatcherTab(QWidget):
                 it.setBackground(c_gray)
 
     def on_cell_clicked(self, row: int, column: int):
-        """Автозум на экспериментальном графе при клике на столбец 'Факт Exp'."""
+        """Автозум на экспериментальном графе ТОЛЬКО при нажатии на столбец 'Факт Exp'."""
         if column == 4:
             self.zoom_to_exp_node_at_row(row)
 
@@ -428,9 +440,6 @@ class MatcherTab(QWidget):
         if c_idx is not None:
             self.highlight_atom_and_connections(c_idx)
 
-        if self.table.currentColumn() == 4:
-            self.zoom_to_exp_node_at_row(row)
-
     def on_mol_atom_clicked(self, atom_idx: int):
         if not self.mol or atom_idx >= self.mol.GetNumAtoms():
             return
@@ -446,13 +455,13 @@ class MatcherTab(QWidget):
         self.highlight_atom_and_connections(c_idx)
 
     def on_graph_node_clicked(self, node_id: str):
+        """Обработка клика по ноду на графе: БЕЗ автозума, только подсветка и фокус в таблице."""
         c_idx = None
         if node_id.startswith("C_"):
             c_idx = int(node_id.replace("C_", ""))
         elif node_id.startswith("DFT_"):
             c_idx = int(node_id.replace("DFT_", ""))
         elif node_id.startswith("EXP_"):
-            self.canvas_exp.zoom_to_node(node_id)
             for r in range(self.table.rowCount()):
                 combo = self.table.cellWidget(r, 3)
                 if combo and combo.currentData() == node_id:

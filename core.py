@@ -4,7 +4,8 @@ import math
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 
-from PyQt6.QtWidgets import QLabel, QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsObject, QComboBox, QListView
+from PyQt6.QtWidgets import (QLabel, QGraphicsView, QGraphicsScene, QGraphicsItem,
+                             QGraphicsObject, QComboBox, QListView, QAbstractItemView)
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 from PyQt6.QtGui import QPainter, QPen, QBrush, QFont, QColor, QRadialGradient
 
@@ -28,13 +29,17 @@ NODE_COLORS = {
 
 
 class ScrollableListView(QListView):
-    """Список с гарантированной прокруткой колесом мыши."""
+    """Список с гарантированной поштучной прокруткой колесом мыши."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+
     def wheelEvent(self, event):
         delta = event.angleDelta().y()
         if delta != 0:
             sb = self.verticalScrollBar()
             if sb and sb.isVisible():
-                step = -1 if delta > 0 else 1
+                step = -2 if delta > 0 else 2
                 sb.setValue(sb.value() + step)
                 event.accept()
                 return
@@ -42,16 +47,15 @@ class ScrollableListView(QListView):
 
 
 class ScrollableComboBox(QComboBox):
-    """Выпадающий список с гарантированной прокруткой и широким скроллбаром."""
+    """Выпадающий список с широким скроллбаром и плавной прокруткой."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         lv = ScrollableListView(self)
         self.setView(lv)
-        self.setMaxVisibleItems(7)
+        self.setMaxVisibleItems(10)
         self.setStyleSheet("""
             QComboBox {
-                combobox-popup: 0;
                 padding: 3px 6px;
                 border: 1px solid #B0BEC5;
                 border-radius: 3px;
@@ -62,21 +66,21 @@ class ScrollableComboBox(QComboBox):
                 background-color: white;
                 selection-background-color: #BBDEFB;
                 selection-color: black;
-                outline: 0;
+                min-width: 190px;
             }
             QScrollBar:vertical {
                 border: 1px solid #CFD8DC;
                 background: #ECEFF1;
-                width: 16px;
+                width: 18px;
                 margin: 0px;
             }
             QScrollBar::handle:vertical {
-                background: #90A4AE;
+                background: #78909C;
                 min-height: 25px;
                 border-radius: 4px;
             }
             QScrollBar::handle:vertical:hover {
-                background: #607D8B;
+                background: #455A64;
             }
         """)
 
