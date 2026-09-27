@@ -37,7 +37,7 @@ class ScrollableComboBox(QComboBox):
         view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
         self.setView(view)
-        self.setMaxVisibleItems(25)  # Показывает весь перечень из 19 ядер без искусственной обрезки
+        self.setMaxVisibleItems(25)
         view.viewport().installEventFilter(self)
 
         self.setStyleSheet("""
@@ -462,7 +462,6 @@ class DataParsers:
 
     @staticmethod
     def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float, ignore_artifacts: bool):
-        # 1. Считывание пиков 1D с сохранением точной мультиплетности
         peaks_1d = []
         for m in re.finditer(r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)', exp1d_text):
             s1 = float(m.group('shift'))
@@ -479,7 +478,6 @@ class DataParsers:
                 'is_m': mult == 'm'
             })
 
-        # 2. HSQC: знак фазы определяет CH2
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip().lower()
@@ -504,7 +502,6 @@ class DataParsers:
         exp_nodes = {}
         idx = 0
 
-        # А) CH2 группы
         paired_neg = set()
         ch2_groups = []
 
@@ -573,7 +570,6 @@ class DataParsers:
             }
             idx += 1
 
-        # Б) CH и CH3 группы
         for p in pos_peaks:
             matched_p = min(peaks_1d, key=lambda x: abs(x['shift'] - p['h']), default=None)
             integ = matched_p['integ'] if (matched_p and abs(matched_p['shift'] - p['h']) < 0.08) else 1
@@ -602,7 +598,6 @@ class DataParsers:
             h_str = ", ".join([f"{h:.2f}" for h in v['h_list']])
             exp_nodes[k]['label'] = f"{h_str}\n{v['c']:.1f} ({v['type']})"
 
-        # 3. COSY кросс-пики
         cosy = []
         for line in cosy_text.splitlines():
             toks = line.strip().split()

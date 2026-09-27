@@ -26,24 +26,16 @@ sys.excepthook = handle_exception
 
 
 def get_exp_multiplicity(ev: dict) -> str:
-    """Возвращает точную экспериментальную мультиплетность или аккуратно выводит ее из J/типа."""
     m = ev.get('mult')
-    if m:
-        return str(m)
-    if ev.get('is_singlet'):
-        return 's'
-    if ev.get('is_multiplet'):
-        return 'm'
+    if m: return str(m)
+    if ev.get('is_singlet'): return 's'
+    if ev.get('is_multiplet'): return 'm'
     j_list = ev.get('j_vals', [])
     n_j = len(j_list)
-    if n_j == 0:
-        return 's' if ev.get('type') == 'CH3' else 'm'
-    if n_j == 1:
-        return 'd'
-    if n_j == 2:
-        return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
-    if n_j == 3:
-        return 'ddd'
+    if n_j == 0: return 's' if ev.get('type') == 'CH3' else 'm'
+    if n_j == 1: return 'd'
+    if n_j == 2: return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
+    if n_j == 3: return 'ddd'
     return 'm'
 
 
@@ -135,23 +127,17 @@ class MatcherTab(QWidget):
         for e in dft_edges:
             u, v = e[0].replace("DFT_", "C_"), e[1].replace("DFT_", "C_")
             j_val = e[2] if len(e) >= 3 else 7.0
-            if u in dft_node_j:
-                dft_node_j[u].append(j_val)
-            if v in dft_node_j:
-                dft_node_j[v].append(j_val)
+            if u in dft_node_j: dft_node_j[u].append(j_val)
+            if v in dft_node_j: dft_node_j[v].append(j_val)
         for k in dft_node_j:
             dft_node_j[k] = sorted([round(x, 1) for x in dft_node_j[k]])
 
         def get_dft_multiplicity(j_list: List[float]) -> str:
             n_j = len(j_list)
-            if n_j == 0:
-                return 's'
-            if n_j == 1:
-                return 'd'
-            if n_j == 2:
-                return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
-            if n_j == 3:
-                return 'ddd'
+            if n_j == 0: return 's'
+            if n_j == 1: return 'd'
+            if n_j == 2: return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
+            if n_j == 3: return 'ddd'
             return 'm'
 
         def check_shifts_valid(d_node_key: str, e_node_key: str, c_lim: float = 15.0, h_lim: float = 0.5) -> bool:
@@ -186,7 +172,7 @@ class MatcherTab(QWidget):
 
         anchors, used_exp = {}, set()
 
-        # Шаг 1: Автосопоставление метила CH3 (уникальный)
+        # 1. Автосопоставление метила CH3
         xyz_ch3 = [k for k, v in xyz_nodes.items() if self._norm_type(v.get('type')) == 'CH3' and k not in anchors]
         exp_ch3 = [k for k, v in exp_nodes.items() if self._norm_type(v.get('type')) == 'CH3' and k not in used_exp]
         if len(xyz_ch3) == 1 and len(exp_ch3) == 1:
@@ -194,7 +180,7 @@ class MatcherTab(QWidget):
                 anchors[xyz_ch3[0]] = (exp_ch3[0], "Уникальный CH3")
                 used_exp.add(exp_ch3[0])
 
-        # Шаг 2: Строгое совпадение сдвигов и мультиплетности (ΔC <= 15, ΔH <= 0.5, строго один кандидат)
+        # 2. Строгое совпадение сдвигов и мультиплетности
         for d_node in sorted(xyz_nodes.keys(), key=lambda x: int(x.split('_')[1])):
             if d_node in anchors:
                 continue
@@ -235,12 +221,9 @@ class MatcherTab(QWidget):
         self.table.setRowCount(0)
         c_green, c_gray = QColor(220, 255, 220), QColor(245, 245, 245)
 
-        # Сортировка абсолютно всех экспериментальных узлов по порядковому номеру EXP_0 ... EXP_18
         def exp_sort_key(k: str) -> int:
-            try:
-                return int(k.replace("EXP_", ""))
-            except Exception:
-                return 999
+            try: return int(k.replace("EXP_", ""))
+            except Exception: return 999
 
         sorted_exp_keys = sorted(exp_nodes.keys(), key=exp_sort_key)
 
@@ -280,7 +263,6 @@ class MatcherTab(QWidget):
             cb.blockSignals(True)
             cb.addItem("— Не выбрано —", userData=None)
 
-            # В список добавляются ВСЕ экспериментальные ядра без исключения
             for ek in sorted_exp_keys:
                 ev = exp_nodes[ek]
                 e_t = self._norm_type(ev.get('type', 'CH'))
@@ -354,7 +336,6 @@ class MatcherTab(QWidget):
                 it.setBackground(c_gray)
 
     def on_cell_clicked(self, row: int, column: int):
-        """Автозум на экспериментальном графе ТОЛЬКО при нажатии на столбец 'Факт Exp' (колонка 4)."""
         if column == 4:
             self.zoom_to_exp_node_at_row(row)
 
@@ -363,8 +344,7 @@ class MatcherTab(QWidget):
         e_node = item_exp.data(Qt.ItemDataRole.UserRole) if item_exp else None
         if not e_node:
             combo = self.table.cellWidget(row, 3)
-            if combo:
-                e_node = combo.currentData()
+            if combo: e_node = combo.currentData()
         if e_node:
             self.canvas_exp.zoom_to_node(e_node)
 
@@ -386,10 +366,8 @@ class MatcherTab(QWidget):
             u, v = e[0], e[1]
             jv = e[2] if len(e) >= 3 else 0.0
             partner_key = None
-            if u == dft_node_name:
-                partner_key = v
-            elif v == dft_node_name:
-                partner_key = u
+            if u == dft_node_name: partner_key = v
+            elif v == dft_node_name: partner_key = u
 
             if partner_key:
                 p_c_idx = int(partner_key.replace("DFT_", ""))
@@ -401,24 +379,18 @@ class MatcherTab(QWidget):
 
         colors = {}
         colors[c_idx] = (1.0, 0.25, 0.0)
-        for h in own_protons:
-            colors[h] = (1.0, 0.65, 0.0)
-        for b in bonded_neighbors:
-            colors[b] = (0.12, 0.55, 1.0)
-        for jp in j_partners:
-            colors[jp] = (0.15, 0.80, 0.30)
-        for jph in j_partner_protons:
-            colors[jph] = (0.45, 0.90, 0.20)
+        for h in own_protons: colors[h] = (1.0, 0.65, 0.0)
+        for b in bonded_neighbors: colors[b] = (0.12, 0.55, 1.0)
+        for jp in j_partners: colors[jp] = (0.15, 0.80, 0.30)
+        for jph in j_partner_protons: colors[jph] = (0.45, 0.90, 0.20)
 
         highlight_bonds = []
         for b in bonded_neighbors:
             bond = self.mol.GetBondBetweenAtoms(c_idx, b)
-            if bond:
-                highlight_bonds.append(bond.GetIdx())
+            if bond: highlight_bonds.append(bond.GetIdx())
         for h in own_protons:
             bond = self.mol.GetBondBetweenAtoms(c_idx, h)
-            if bond:
-                highlight_bonds.append(bond.GetIdx())
+            if bond: highlight_bonds.append(bond.GetIdx())
 
         all_highlight_atoms = list(colors.keys())
         self._render_mol(highlights=all_highlight_atoms, highlight_colors=colors, highlight_bonds=highlight_bonds)
@@ -486,7 +458,6 @@ class MatcherTab(QWidget):
         self.highlight_atom_and_connections(c_idx)
 
     def on_graph_node_clicked(self, node_id: str):
-        """Клик по вершине графа: БЕЗ автозума, только подсветка связей и прокрутка таблицы."""
         c_idx = None
         if node_id.startswith("C_"):
             c_idx = int(node_id.replace("C_", ""))
@@ -620,11 +591,15 @@ class MatcherTab(QWidget):
                 })
 
         ai_payload = {
-            "meta_prompt": (
-                "Ты — эксперт по спектроскопии ЯМР и квантово-химическому моделированию. "
-                "Ниже представлены экспериментальные данные (1H, 13C, HSQC, COSY) и расчетные данные DFT. "
-                "Часть сигналов уже надежно соотнесена (якоря). Твоя задача: на основе топологии спиновых графов, "
-                "констант спин-спинового взаимодействия (J) и близости химсдвигов досоотнести оставшиеся несоотнесенные узлы."
+            "prompt": (
+                "Проанализируй предоставленные экспериментальные данные (1H, 13C, HSQC, COSY), расчетные данные DFT "
+                "и топологические графы (структура XYZ, спиновый граф DFT с константами J и экспериментальный COSY-граф). "
+                "Твоя задача:\n"
+                "1. Проверить уже назначенные авто-якоря на корректность.\n"
+                "2. Выполнить сопоставление всех оставшихся несоотнесенных ядер (углероды и протоны), "
+                "сопоставляя топологию связности, константы J и химические сдвиги.\n"
+                "3. На основе получившегося сопоставления прийти к выводу о правильности работы алгоритма, "
+                "указать на слабые места, ложные связывания или ограничения и предложить пути их устранения."
             ),
             "statistics": {
                 "total_carbons": len(xyz_nodes),
@@ -634,6 +609,11 @@ class MatcherTab(QWidget):
             "current_table_matches": current_matches,
             "unassigned_dft_nodes": unassigned_dft,
             "unassigned_exp_nodes": unassigned_exp,
+            "graphs": {
+                "xyz_graph": self.graphs_data.get("xyz_graph", {}),
+                "dft_graph": self.graphs_data.get("dft_graph", {}),
+                "exp_graph": self.graphs_data.get("exp_graph", {})
+            },
             "raw_graphs": self.graphs_data
         }
 
