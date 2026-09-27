@@ -375,86 +375,149 @@ class DataParsers:
     @staticmethod
     def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float,
                   ignore_artifacts: bool):
+        # 1. 1D 1H
         peaks_1d = []
         for m in re.finditer(
-                r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?',
+                r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)',
                 exp1d_text):
             s1 = float(m.group('shift'))
+            s2 = float(m.group('shift2')) if m.group('shift2') else s1
             mult = m.group('mult').lower()
+            integ = int(m.group('integ')) if m.group('integ') else (2 if '2h' in m.group(0).lower() else 1)
             j_vals = [float(x) for x in re.findall(r'\d+\.?\d*', m.group('couplings'))] if m.group('couplings') else []
-            peaks_1d.append({'shift': s1, 'mult': mult, 'j_vals': j_vals, 'is_s': mult == 's', 'is_m': mult == 'm'})
+            peaks_1d.append({
+                'shift': (s1 + s2) / 2.0,
+                'mult': mult,
+                'integ': integ,
+                'j_vals': j_vals,
+                'is_s': mult == 's',
+                'is_m': mult == 'm'
+            })
 
+        # 2. HSQC: Знак фазы определяет CH2!
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip().lower()
-            if not line_str or "ppm" in line_str or "flags" in line_str or "dmso" in line_str: continue
+            if not line_str or "ppm" in line_str or "flags" in line_str or "dmso" in line_str:
+                continue
             toks = line_str.split()
             if len(toks) >= 4:
                 try:
                     off = 1 if toks[0].isdigit() else 0
                     c_v, h_v = float(toks[off]), float(toks[off + 1])
-                    if 38.5 <= c_v <= 41.5 and 2.40 <= h_v <= 2.60: continue
+                    if 38.5 <= c_v <= 41.5 and 2.40 <= h_v <= 2.60:
+                        continue
                     area = float(toks[off + 5]) if len(toks) >= off + 6 else 0.0
-                    is_neg = toks[off + 2].startswith('-') or (area < -0.1)
+                    is_neg = toks[off + 2].startswith('-') or (area < -0.05)
                     hsqc_raw.append({'c': c_v, 'h': h_v, 'is_neg': is_neg})
                 except (ValueError, IndexError):
                     pass
 
-        neg_peaks, pos_peaks = [p for p in hsqc_raw if p['is_neg']], [p for p in hsqc_raw if not p['is_neg']]
-        paired, ch2_cl = set(), []
-
-        for i in range(len(neg_peaks)):
-            for j in range(i + 1, len(neg_peaks)):
-                if abs(neg_peaks[i]['c'] - neg_peaks[j]['c']) <= c_tol and abs(
-                        neg_peaks[i]['h'] - neg_peaks[j]['h']) >= 0.04:
-                    if i not in paired and j not in paired:
-                        ch2_cl.append([neg_peaks[i], neg_peaks[j]])
-                        paired.update([i, j])
-        for i, p in enumerate(neg_peaks):
-            if i not in paired: ch2_cl.append([p])
+        neg_peaks = [p for p in hsqc_raw if p['is_neg']]
+        pos_peaks = [p for p in hsqc_raw if not p['is_neg']]
 
         exp_nodes = {}
         idx = 0
-        for cl in ch2_cl:
-            c_mean, h_list = float(np.mean([p['c'] for p in cl])), sorted([p['h'] for p in cl], reverse=True)
+
+        # А) CH2 группы (строго по отрицательной фазе)
+        paired_neg = set()
+        ch2_groups = []
+
+        for i in range(len(neg_peaks)):
+            if i in paired_neg: continue
+            best_j = None
+            min_c_diff = c_tol
+            for j in range(i + 1, len(neg_peaks)):
+                if j in paired_neg: continue
+                c_diff = abs(neg_peaks[i]['c'] - neg_peaks[j]['c'])
+                h_diff = abs(neg_peaks[i]['h'] - neg_peaks[j]['h'])
+                if c_diff <= min_c_diff and h_diff >= 0.04:
+                    min_c_diff = c_diff
+                    best_j = j
+
+            if best_j is not None:
+                ch2_groups.append([neg_peaks[i], neg_peaks[best_j]])
+                paired_neg.update([i, best_j])
+            else:
+                ch2_groups.append([neg_peaks[i]])
+                paired_neg.add(i)
+
+        for cl in ch2_groups:
+            c_mean = float(np.mean([p['c'] for p in cl]))
+            h_raw = sorted([p['h'] for p in cl], reverse=True)
+
             n_j, is_s, is_m = [], False, False
-            for h in h_list:
-                for p1d in peaks_1d:
-                    if abs(p1d['shift'] - h) < 0.08:
-                        n_j.extend(p1d['j_vals'])
-                        if p1d['is_s']: is_s = True
-                        if p1d['is_m']: is_m = True
-            exp_nodes[f"EXP_{idx}"] = {'c': round(c_mean, 2), 'h_list': h_list,
-                                       'j_vals': sorted(list(set(n_j)), reverse=True), 'is_singlet': is_s,
-                                       'is_multiplet': is_m, 'type': 'CH2'}
+            total_integ = 0
+            for h in h_raw:
+                matched_p = min(peaks_1d, key=lambda p: abs(p['shift'] - h), default=None)
+                if matched_p and abs(matched_p['shift'] - h) < 0.08:
+                    n_j.extend(matched_p['j_vals'])
+                    if matched_p['is_s']: is_s = True
+                    if matched_p['is_m']: is_m = True
+                    total_integ += matched_p['integ']
+                else:
+                    total_integ += 1
+
+            if len(h_raw) == 1 and total_integ >= 2:
+                h_list = [h_raw[0], h_raw[0]]
+                is_complete = True
+            elif len(h_raw) == 2:
+                h_list = h_raw
+                is_complete = True
+            else:
+                h_list = h_raw
+                is_complete = False
+
+            exp_nodes[f"EXP_{idx}"] = {
+                'c': round(c_mean, 2),
+                'h_list': h_list,
+                'j_vals': sorted(list(set(n_j)), reverse=True),
+                'is_singlet': is_s,
+                'is_multiplet': is_m,
+                'type': 'CH2',
+                'is_complete': is_complete,
+                'integ': len(h_list)
+            }
             idx += 1
 
+        # Б) CH и CH3 (по положительной фазе)
         for p in pos_peaks:
-            is_methoxyl = (54.0 <= p['c'] <= 57.0 and 3.80 <= p['h'] <= 3.95)
-            n_j, is_s, is_m = [], is_methoxyl, False
-            for p1d in peaks_1d:
-                if abs(p1d['shift'] - p['h']) < 0.08:
-                    n_j.extend(p1d['j_vals'])
-                    if p1d['is_s']: is_s = True
-                    if p1d['is_m']: is_m = True
-            exp_nodes[f"EXP_{idx}"] = {'c': round(p['c'], 2), 'h_list': [p['h']],
-                                       'j_vals': sorted(list(set(n_j)), reverse=True), 'is_singlet': is_s,
-                                       'is_multiplet': is_m, 'type': "CH3" if is_methoxyl else "CH"}
+            matched_p = min(peaks_1d, key=lambda x: abs(x['shift'] - p['h']), default=None)
+            integ = matched_p['integ'] if (matched_p and abs(matched_p['shift'] - p['h']) < 0.08) else 1
+            is_s = matched_p['is_s'] if matched_p else False
+            is_m = matched_p['is_m'] if matched_p else False
+            n_j = matched_p['j_vals'] if matched_p else []
+
+            is_ch3 = (integ >= 3) or (54.0 <= p['c'] <= 57.0 and 3.80 <= p['h'] <= 3.95)
+            g_type = "CH3" if is_ch3 else "CH"
+
+            exp_nodes[f"EXP_{idx}"] = {
+                'c': round(p['c'], 2),
+                'h_list': [p['h']],
+                'j_vals': sorted(list(set(n_j)), reverse=True),
+                'is_singlet': is_s or is_ch3,
+                'is_multiplet': is_m,
+                'type': g_type,
+                'is_complete': True,
+                'integ': 3 if is_ch3 else 1
+            }
             idx += 1
 
         for k, v in exp_nodes.items():
             h_str = ", ".join([f"{h:.2f}" for h in v['h_list']])
             exp_nodes[k]['label'] = f"{h_str}\n{v['c']:.1f} ({v['type']})"
 
+        # 3. COSY
         cosy = []
         for line in cosy_text.splitlines():
             toks = line.strip().split()
-            if not toks or "artifact" in line.lower() and ignore_artifacts: continue
+            if not toks or ("artifact" in line.lower() and ignore_artifacts): continue
             try:
                 off = 1 if toks[0].isdigit() else 0
                 f1, f2 = float(toks[off]), float(toks[off + 1])
                 area = float(toks[off + 5]) if len(toks) >= off + 6 else 1.0
-                if abs(f1 - f2) >= 0.04 and abs(area) >= cosy_min_area: cosy.append((f1, f2, abs(area)))
+                if abs(f1 - f2) >= 0.04 and abs(area) >= cosy_min_area:
+                    cosy.append((f1, f2, abs(area)))
             except (ValueError, IndexError):
                 pass
 
@@ -462,8 +525,9 @@ class DataParsers:
             return min(exp_nodes.keys(), key=lambda k: min([abs(h - s) for h in exp_nodes[k]['h_list']]), default=None)
 
         edges_dict = {}
-        for i, u in enumerate(list(exp_nodes.keys())):
-            for v in list(exp_nodes.keys())[i + 1:]:
+        node_keys = list(exp_nodes.keys())
+        for i, u in enumerate(node_keys):
+            for v in node_keys[i + 1:]:
                 if exp_nodes[u]['is_singlet'] or exp_nodes[v]['is_singlet']: continue
                 c_area = max([a for f1, f2, a in cosy if
                               (match_h(f1) == u and match_h(f2) == v) or (match_h(f1) == v and match_h(f2) == u)],
@@ -479,7 +543,8 @@ class DataParsers:
                             if abs(ju - jv) <= min_d:
                                 min_d = abs(ju - jv)
                                 shared_j = round((ju + jv) / 2.0, 1)
-                    if shared_j is not None: edges_dict[(u, v)] = shared_j
+                    if shared_j is not None:
+                        edges_dict[(u, v)] = shared_j
                 elif (exp_nodes[u]['is_multiplet'] or exp_nodes[v]['is_multiplet']) and c_area >= 1.0:
                     edges_dict[(u, v)] = min(uj + vj + [7.0])
 

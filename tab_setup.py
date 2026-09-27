@@ -154,7 +154,6 @@ class VisualizerTab(QWidget):
 
             dft_n, dft_e = DataParsers.parse_dft(self.txt_dft.toPlainText().strip())
 
-            # Интеграция сдвигов (Экранирование)
             dft_shifts = DataParsers.parse_dft_shifts(
                 self.txt_dft_shielding.toPlainText().strip(),
                 self.sp_tms_c.value(),
@@ -162,8 +161,8 @@ class VisualizerTab(QWidget):
             )
             for k, d in dft_n.items():
                 c_idx = int(k.split('_')[1])
-                d['c_shift'] = dft_shifts.get(c_idx, 0.0)
-                d['h_shifts'] = [dft_shifts.get(h, 0.0) for h in d.get('H', [])]
+                d['c_shift'] = dft_shifts.get(c_idx, None)
+                d['h_shifts'] = [dft_shifts.get(h, None) for h in d.get('H', [])]
 
             self.cv_dft.set_graph(dft_n, dft_e, True)
 
