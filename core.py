@@ -314,6 +314,24 @@ class DataParsers:
         return mol, rd_nodes, edges
 
     @staticmethod
+    def parse_dft_shifts(dft_text: str, tms_c: float, tms_h: float) -> dict:
+        shifts = {}
+        for line in dft_text.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[0].isdigit() and parts[1].isalpha():
+                idx = int(parts[0])
+                sym = parts[1].upper()
+                try:
+                    iso = float(parts[2])
+                    if sym == 'C':
+                        shifts[idx] = tms_c - iso
+                    elif sym == 'H':
+                        shifts[idx] = tms_h - iso
+                except ValueError:
+                    pass
+        return shifts
+
+    @staticmethod
     def parse_dft(dft_text: str) -> Tuple[Dict[str, dict], List[Tuple[str, str, float]]]:
         atoms, j_matrix, col_headers = {}, {}, []
         for line in dft_text.splitlines():
@@ -341,7 +359,7 @@ class DataParsers:
                     if i not in c_nodes[j]: c_nodes[j].append(i)
 
         dft_nodes = {f"DFT_{i}": {"label": f"C {i}\nH:[{','.join(map(str, sorted(h)))}]", "type": f"CH{len(h)}",
-                                  "h_count": len(h)} for i, h in c_nodes.items() if h}
+                                  "h_count": len(h), "H": h} for i, h in c_nodes.items() if h}
 
         max_j = {}
         for (i, j), val in j_matrix.items():

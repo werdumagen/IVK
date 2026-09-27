@@ -11,7 +11,6 @@ from core import InteractiveGraphCanvas, DataParsers
 
 
 class VisualizerTab(QWidget):
-    # Сигнал для передачи данных во вторую вкладку
     requestMatching = pyqtSignal(dict, object)
 
     def __init__(self, parent=None):
@@ -24,7 +23,6 @@ class VisualizerTab(QWidget):
         layout = QHBoxLayout(self)
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Левая панель (ввод)
         left_w = QWidget()
         l_layout = QVBoxLayout(left_w)
         l_layout.setContentsMargins(5, 5, 5, 5)
@@ -40,12 +38,46 @@ class VisualizerTab(QWidget):
 
         self.tabs_in = QTabWidget()
 
-        t1, t2, t3 = QWidget(), QWidget(), QWidget()
-        self.txt_xyz = QTextEdit();
+        # 1. XYZ
+        t1 = QWidget()
+        self.txt_xyz = QTextEdit()
         QVBoxLayout(t1).addWidget(self.txt_xyz)
-        self.txt_dft = QTextEdit();
-        QVBoxLayout(t2).addWidget(self.txt_dft)
 
+        # 2. DFT + Экранирование + TMS
+        t2 = QWidget()
+        t2_l = QVBoxLayout(t2)
+
+        tms_lay = QHBoxLayout()
+        tms_lay.addWidget(QLabel("TMS 13C:"))
+        self.sp_tms_c = QDoubleSpinBox();
+        self.sp_tms_c.setRange(0, 300);
+        self.sp_tms_c.setValue(188.1)
+        tms_lay.addWidget(self.sp_tms_c)
+        tms_lay.addWidget(QLabel("TMS 1H:"))
+        self.sp_tms_h = QDoubleSpinBox();
+        self.sp_tms_h.setRange(0, 50);
+        self.sp_tms_h.setValue(31.8)
+        tms_lay.addWidget(self.sp_tms_h)
+        t2_l.addLayout(tms_lay)
+
+        dft_split = QSplitter(Qt.Orientation.Vertical)
+
+        gb_j = QGroupBox("Матрица J-констант (DFT)")
+        l_j = QVBoxLayout(gb_j)
+        self.txt_dft = QTextEdit()
+        l_j.addWidget(self.txt_dft)
+        dft_split.addWidget(gb_j)
+
+        gb_s = QGroupBox("Спектр экранирования (Shielding)")
+        l_s = QVBoxLayout(gb_s)
+        self.txt_dft_shielding = QTextEdit()
+        l_s.addWidget(self.txt_dft_shielding)
+        dft_split.addWidget(gb_s)
+
+        t2_l.addWidget(dft_split)
+
+        # 3. Experiment
+        t3 = QWidget()
         t3_l = QVBoxLayout(t3)
         fbox = QGroupBox("Параметры фильтрации и J-Matching")
         fl = QHBoxLayout(fbox)
@@ -94,7 +126,6 @@ class VisualizerTab(QWidget):
 
         splitter.addWidget(left_w)
 
-        # Правая панель (вывод графов)
         right_w = QWidget()
         r_layout = QVBoxLayout(right_w)
         self.tabs_out = QTabWidget()
@@ -122,6 +153,18 @@ class VisualizerTab(QWidget):
             self.cv_xyz.set_graph(xyz_n, xyz_e, False)
 
             dft_n, dft_e = DataParsers.parse_dft(self.txt_dft.toPlainText().strip())
+
+            # Интеграция сдвигов (Экранирование)
+            dft_shifts = DataParsers.parse_dft_shifts(
+                self.txt_dft_shielding.toPlainText().strip(),
+                self.sp_tms_c.value(),
+                self.sp_tms_h.value()
+            )
+            for k, d in dft_n.items():
+                c_idx = int(k.split('_')[1])
+                d['c_shift'] = dft_shifts.get(c_idx, 0.0)
+                d['h_shifts'] = [dft_shifts.get(h, 0.0) for h in d.get('H', [])]
+
             self.cv_dft.set_graph(dft_n, dft_e, True)
 
             exp_n, exp_e = DataParsers.parse_exp(
@@ -155,9 +198,11 @@ class VisualizerTab(QWidget):
     def save_session(self):
         data = {
             "xyz": self.txt_xyz.toPlainText(), "dft": self.txt_dft.toPlainText(),
+            "dft_shield": self.txt_dft_shielding.toPlainText(),
             "exp1d": self.txt_1d.toPlainText(), "hsqc": self.txt_hsqc.toPlainText(),
             "cosy": self.txt_cosy.toPlainText(),
-            "settings": {"c_tol": self.sp_ctol.value(), "j_tol": self.sp_jtol.value(), "area": self.sp_area.value()}
+            "settings": {"c_tol": self.sp_ctol.value(), "j_tol": self.sp_jtol.value(), "area": self.sp_area.value(),
+                         "tms_c": self.sp_tms_c.value(), "tms_h": self.sp_tms_h.value()}
         }
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить", "", "JSON (*.json)")
         if path:
@@ -170,6 +215,7 @@ class VisualizerTab(QWidget):
                 data = json.load(f)
             self.txt_xyz.setPlainText(data.get("xyz", ""))
             self.txt_dft.setPlainText(data.get("dft", ""))
+            self.txt_dft_shielding.setPlainText(data.get("dft_shield", ""))
             self.txt_1d.setPlainText(data.get("exp1d", ""))
             self.txt_hsqc.setPlainText(data.get("hsqc", ""))
             self.txt_cosy.setPlainText(data.get("cosy", ""))
@@ -177,3 +223,5 @@ class VisualizerTab(QWidget):
             if "c_tol" in st: self.sp_ctol.setValue(st["c_tol"])
             if "j_tol" in st: self.sp_jtol.setValue(st["j_tol"])
             if "area" in st: self.sp_area.setValue(st["area"])
+            if "tms_c" in st: self.sp_tms_c.setValue(st["tms_c"])
+            if "tms_h" in st: self.sp_tms_h.setValue(st["tms_h"])
