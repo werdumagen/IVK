@@ -375,7 +375,7 @@ class DataParsers:
     @staticmethod
     def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float,
                   ignore_artifacts: bool):
-        # 1. 1D 1H
+        # 1. 1D 1H: Считываем параметры пиков
         peaks_1d = []
         for m in re.finditer(
                 r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)',
@@ -488,7 +488,9 @@ class DataParsers:
             is_m = matched_p['is_m'] if matched_p else False
             n_j = matched_p['j_vals'] if matched_p else []
 
-            is_ch3 = (integ >= 3) or (54.0 <= p['c'] <= 57.0 and 3.80 <= p['h'] <= 3.95)
+            # ИСПРАВЛЕНИЕ: CH3 строго синглет или характеристичная метокси-группа!
+            # Сложный мультиплет с перекрытием (is_m) ни при каких условиях не считается CH3
+            is_ch3 = (54.0 <= p['c'] <= 57.0 and 3.75 <= p['h'] <= 4.0) or (integ >= 3 and is_s and not is_m)
             g_type = "CH3" if is_ch3 else "CH"
 
             exp_nodes[f"EXP_{idx}"] = {

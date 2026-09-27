@@ -1,11 +1,13 @@
 # tab_match.py
 import sys
+import json
 import traceback
 from typing import Optional, List
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QSplitter, QGroupBox, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QComboBox, QListView, QMessageBox)
+                             QHeaderView, QAbstractItemView, QComboBox, QListView,
+                             QMessageBox, QPushButton, QFileDialog)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPixmap
 
@@ -60,9 +62,21 @@ class MatcherTab(QWidget):
 
         right_w = QWidget()
         r_layout = QVBoxLayout(right_w)
+
+        # Верхняя панель: Статус + Кнопка Экспорта для ИИ
+        top_bar = QHBoxLayout()
         self.lbl_info = QLabel("Ожидание данных...")
         self.lbl_info.setStyleSheet("font-weight: bold; font-size: 13px; color: #1565C0; padding: 4px;")
-        r_layout.addWidget(self.lbl_info)
+        top_bar.addWidget(self.lbl_info)
+        top_bar.addStretch()
+
+        self.btn_export_ai = QPushButton("🤖 Экспорт данных для анализа ИИ (JSON)")
+        self.btn_export_ai.setStyleSheet(
+            "background-color: #6A1B9A; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px;"
+        )
+        self.btn_export_ai.clicked.connect(self.export_ai_data)
+        top_bar.addWidget(self.btn_export_ai)
+        r_layout.addLayout(top_bar)
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
@@ -117,30 +131,25 @@ class MatcherTab(QWidget):
             if n_j == 2: return 't' if abs(j_list[0] - j_list[1]) <= 1.0 else 'dd'
             return 'm'
 
-        # Строгая проверка сдвигов без усреднения протонов
         def check_shifts_valid(d_node_key: str, e_node_key: str, c_lim: float = 15.0, h_lim: float = 0.5) -> bool:
             c_idx = int(d_node_key.split('_')[1])
             d_d = dft_nodes.get(f"DFT_{c_idx}", {})
             e_d = exp_nodes.get(e_node_key, {})
 
-            # 1. Проверка углерода
             c_dft = d_d.get('c_shift')
             c_exp = e_d.get('c')
             if c_dft is None or c_exp is None or abs(float(c_dft) - float(c_exp)) > c_lim:
                 return False
 
-            # 2. Проверка количества протонов
             h_dfts = sorted([float(x) for x in d_d.get('h_shifts', []) if x is not None])
             h_exps = sorted([float(x) for x in e_d.get('h_list', []) if x is not None])
 
-            # Запрет сопоставления неполных CH2
             if not e_d.get('is_complete', True):
                 return False
 
             if len(h_dfts) != len(h_exps):
                 return False
 
-            # 3. Попарная проверка каждого протона
             for hd, he in zip(h_dfts, h_exps):
                 if abs(hd - he) > h_lim:
                     return False
@@ -149,8 +158,18 @@ class MatcherTab(QWidget):
 
         anchors, used_exp = {}, set()
 
-        # Шаг 1: Автосопоставление по жесткому правилу (ΔC <= 15, ΔH <= 0.5 для КАЖДОГО протона, уникальный кандидат)
+        # Шаг 1: Авто-Якорь CH3 (уникальный)
+        xyz_ch3 = [k for k, v in xyz_nodes.items() if v.get('type') == 'CH3' and k not in anchors]
+        exp_ch3 = [k for k, v in exp_nodes.items() if v.get('type') == 'CH3' and k not in used_exp]
+        if len(xyz_ch3) == 1 and len(exp_ch3) == 1:
+            if check_shifts_valid(xyz_ch3[0], exp_ch3[0], c_lim=20.0, h_lim=1.0):
+                anchors[xyz_ch3[0]] = (exp_ch3[0], "Уникальный CH3")
+                used_exp.add(exp_ch3[0])
+
+        # Шаг 2: Строгое совпадение сдвигов и мультиплетности (ΔC <= 15, ΔH <= 0.5 для каждого протона)
         for d_node in sorted(xyz_nodes.keys(), key=lambda x: int(x.split('_')[1])):
+            if d_node in anchors:
+                continue
             c_idx = int(d_node.split('_')[1])
             d_d = dft_nodes.get(f"DFT_{c_idx}", {})
             d_type = xyz_nodes[d_node].get('type')
@@ -184,14 +203,6 @@ class MatcherTab(QWidget):
                 e_match = strict_cands[0]
                 anchors[d_node] = (e_match, "Строгое совпадение сдвигов (ΔC≤15, ΔH≤0.5) и мультиплетности")
                 used_exp.add(e_match)
-
-        # Шаг 2: Уникальный CH3 (если остался)
-        xyz_ch3 = [k for k, v in xyz_nodes.items() if v.get('type') == 'CH3' and k not in anchors]
-        exp_ch3 = [k for k, v in exp_nodes.items() if v.get('type') == 'CH3' and k not in used_exp]
-        if len(xyz_ch3) == 1 and len(exp_ch3) == 1:
-            if check_shifts_valid(xyz_ch3[0], exp_ch3[0], c_lim=20.0, h_lim=1.0):
-                anchors[xyz_ch3[0]] = (exp_ch3[0], "Уникальный CH3")
-                used_exp.add(exp_ch3[0])
 
         self.table.setRowCount(0)
         c_green, c_gray = QColor(220, 255, 220), QColor(245, 245, 245)
@@ -293,6 +304,146 @@ class MatcherTab(QWidget):
             c_gray = QColor(245, 245, 245)
             for it in [item_status, item_dft, item_dft_val, item_exp_val, item_reason]:
                 it.setBackground(c_gray)
+
+    def export_ai_data(self):
+        """Сохранение полного пакета данных для дальнейшего анализа нейросетью."""
+        if not self.graphs_data:
+            QMessageBox.warning(self, "Внимание", "Нет данных для экспорта. Сначала выполните построение графов.")
+            return
+
+        xyz_nodes = self.graphs_data.get("xyz_graph", {}).get("nodes", {})
+        dft_nodes = self.graphs_data.get("dft_graph", {}).get("nodes", {})
+        dft_edges = self.graphs_data.get("dft_graph", {}).get("edges", [])
+        exp_nodes = self.graphs_data.get("exp_graph", {}).get("nodes", {})
+        exp_edges = self.graphs_data.get("exp_graph", {}).get("edges", [])
+
+        # Собираем актуальные сопоставления из таблицы
+        current_matches = []
+        assigned_dft = set()
+        assigned_exp = set()
+
+        for r in range(self.table.rowCount()):
+            d_node_item = self.table.item(r, 1)
+            status_item = self.table.item(r, 0)
+            reason_item = self.table.item(r, 5)
+            combo = self.table.cellWidget(r, 3)
+
+            if not d_node_item or not combo:
+                continue
+
+            d_node = d_node_item.text()
+            e_node = combo.currentData()
+            status = status_item.text() if status_item else "—"
+            reason = reason_item.text() if reason_item else "—"
+
+            c_idx = int(d_node.split('_')[1])
+            d_d = dft_nodes.get(f"DFT_{c_idx}", {})
+
+            match_info = {
+                "dft_node": d_node,
+                "status": status,
+                "assigned_exp_node": e_node,
+                "reason": reason,
+                "dft_calculated": {
+                    "c_shift": d_d.get("c_shift"),
+                    "h_shifts": d_d.get("h_shifts", [])
+                }
+            }
+
+            if e_node:
+                assigned_dft.add(d_node)
+                assigned_exp.add(e_node)
+                e_d = exp_nodes.get(e_node, {})
+                match_info["exp_actual"] = {
+                    "c_shift": e_d.get("c"),
+                    "h_shifts": e_d.get("h_list", []),
+                    "j_vals": e_d.get("j_vals", []),
+                    "type": e_d.get("type")
+                }
+            else:
+                match_info["exp_actual"] = None
+
+            current_matches.append(match_info)
+
+        # Формируем список оставшихся несоотнесенных узлов
+        unassigned_dft = []
+        for d_node, d_info in xyz_nodes.items():
+            if d_node not in assigned_dft:
+                c_idx = int(d_node.split('_')[1])
+                d_d = dft_nodes.get(f"DFT_{c_idx}", {})
+
+                # Поиск спиновых соседей по DFT
+                spin_neighbors = []
+                for e in dft_edges:
+                    u = e[0].replace("DFT_", "C_")
+                    v = e[1].replace("DFT_", "C_")
+                    jv = e[2] if len(e) >= 3 else None
+                    if u == d_node:
+                        spin_neighbors.append({"neighbor": v, "j_hz": jv})
+                    elif v == d_node:
+                        spin_neighbors.append({"neighbor": u, "j_hz": jv})
+
+                unassigned_dft.append({
+                    "dft_node": d_node,
+                    "type": d_info.get("type"),
+                    "c_shift_calculated": d_d.get("c_shift"),
+                    "h_shifts_calculated": d_d.get("h_shifts", []),
+                    "spin_neighbors_dft": spin_neighbors
+                })
+
+        unassigned_exp = []
+        for e_node, e_info in exp_nodes.items():
+            if e_node not in assigned_exp:
+                # Поиск соседей по COSY
+                cosy_neighbors = []
+                for e in exp_edges:
+                    u, v = e[0], e[1]
+                    jv = e[2] if len(e) >= 3 else None
+                    if u == e_node:
+                        cosy_neighbors.append({"neighbor": v, "j_hz": jv})
+                    elif v == e_node:
+                        cosy_neighbors.append({"neighbor": u, "j_hz": jv})
+
+                unassigned_exp.append({
+                    "exp_node": e_node,
+                    "type": e_info.get("type"),
+                    "c_shift_actual": e_info.get("c"),
+                    "h_shifts_actual": e_info.get("h_list"),
+                    "j_vals_actual": e_info.get("j_vals"),
+                    "is_singlet": e_info.get("is_singlet"),
+                    "is_multiplet": e_info.get("is_multiplet"),
+                    "cosy_neighbors": cosy_neighbors
+                })
+
+        ai_payload = {
+            "meta_prompt": (
+                "Ты — эксперт по спектроскопии ЯМР и квантово-химическому моделированию. "
+                "Ниже представлены экспериментальные данные (1H, 13C, HSQC, COSY) и расчетные данные DFT. "
+                "Часть сигналов уже надежно соотнесена (якоря). Твоя задача: на основе топологии спиновых графов, "
+                "констант спин-спинового взаимодействия (J) и близости химсдвигов досоотнести оставшиеся несоотнесенные узлы."
+            ),
+            "statistics": {
+                "total_carbons": len(xyz_nodes),
+                "matched_count": len(assigned_dft),
+                "unassigned_count": len(unassigned_dft)
+            },
+            "current_table_matches": current_matches,
+            "unassigned_dft_nodes": unassigned_dft,
+            "unassigned_exp_nodes": unassigned_exp,
+            "raw_graphs": self.graphs_data
+        }
+
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить данные для ИИ", "nmr_ai_analysis_data.json",
+                                              "JSON (*.json)")
+        if path:
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(ai_payload, f, ensure_ascii=False, indent=2)
+                QMessageBox.information(
+                    self, "Успех", f"Данные для анализа ИИ сохранены в:\n{path}\n\nФайл готов к загрузке в диалог с ИИ!"
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка сохранения", f"Не удалось записать файл:\n{e}")
 
     def _render_mol(self, highlights: Optional[List[int]] = None):
         if not self.mol:
