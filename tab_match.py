@@ -86,6 +86,7 @@ class MatcherTab(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.itemSelectionChanged.connect(self.on_table_row_selected)
+        self.table.cellClicked.connect(self.on_cell_clicked)
         r_layout.addWidget(self.table)
 
         main_splitter.addWidget(right_w)
@@ -143,10 +144,8 @@ class MatcherTab(QWidget):
             h_exps = sorted([float(x) for x in e_d.get('h_list', []) if x is not None])
 
             d_type = self._norm_type(xyz_nodes[d_node_key].get('type'))
-            e_type = self._norm_type(e_d.get('type'))
 
             if d_type == 'CH3':
-                # Для метила усредняем вращение
                 return abs(float(np.mean(h_dfts)) - float(np.mean(h_exps))) <= 1.0
 
             if not e_d.get('is_complete', True):
@@ -247,7 +246,6 @@ class MatcherTab(QWidget):
             cb.blockSignals(True)
             cb.addItem("— Не выбрано —", userData=None)
 
-            # Заполняем всеми подходящими по типу узлами
             for ek, ev in exp_nodes.items():
                 if self._norm_type(ev.get('type')) == g_type:
                     tag = "" if ev.get('is_complete', True) else " [1H]"
@@ -264,6 +262,8 @@ class MatcherTab(QWidget):
 
                 item_status.setText("Авто-Якорь")
                 item_exp_val.setText(shift_str)
+                item_exp_val.setData(Qt.ItemDataRole.UserRole, e_node)
+                item_exp_val.setToolTip(f"Кликните для перехода к {e_node} на графе")
                 item_reason.setText(reason)
                 for it in [item_status, item_dft, item_dft_val, item_exp_val, item_reason]:
                     it.setBackground(c_green)
@@ -294,6 +294,8 @@ class MatcherTab(QWidget):
             ed = self.graphs_data.get("exp_graph", {}).get("nodes", {}).get(e_node, {})
             shift_str = f"δC {ed.get('c', 0):.2f} / δH {', '.join(f'{h:.2f}' for h in ed.get('h_list', []))}"
             item_exp_val.setText(shift_str)
+            item_exp_val.setData(Qt.ItemDataRole.UserRole, e_node)
+            item_exp_val.setToolTip(f"Кликните для перехода к {e_node} на графе")
 
             c_yellow = QColor(255, 235, 150)
             for it in [item_status, item_dft, item_dft_val, item_exp_val, item_reason]:
@@ -301,13 +303,29 @@ class MatcherTab(QWidget):
         else:
             item_status.setText("Не соотнесено")
             item_exp_val.setText("—")
+            item_exp_val.setData(Qt.ItemDataRole.UserRole, None)
+            item_exp_val.setToolTip("")
             item_reason.setText("—")
             c_gray = QColor(245, 245, 245)
             for it in [item_status, item_dft, item_dft_val, item_exp_val, item_reason]:
                 it.setBackground(c_gray)
 
+    def on_cell_clicked(self, row: int, column: int):
+        """Автозум на экспериментальном графе при клике на столбец 'Факт Exp'."""
+        if column == 4:
+            self.zoom_to_exp_node_at_row(row)
+
+    def zoom_to_exp_node_at_row(self, row: int):
+        item_exp = self.table.item(row, 4)
+        e_node = item_exp.data(Qt.ItemDataRole.UserRole) if item_exp else None
+        if not e_node:
+            combo = self.table.cellWidget(row, 3)
+            if combo:
+                e_node = combo.currentData()
+        if e_node:
+            self.canvas_exp.zoom_to_node(e_node)
+
     def highlight_atom_and_connections(self, c_idx: int):
-        """Подсвечивает сам атом, его протоны, химических соседей и DFT спин-партнеров."""
         if not self.mol or c_idx >= self.mol.GetNumAtoms():
             return
 
@@ -315,7 +333,6 @@ class MatcherTab(QWidget):
         own_protons = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() == 'H']
         bonded_neighbors = [nbr.GetIdx() for nbr in atom.GetNeighbors() if nbr.GetSymbol() != 'H']
 
-        # Ищем партнеров по спин-спиновому взаимодействию DFT
         dft_edges = self.graphs_data.get("dft_graph", {}).get("edges", [])
         dft_node_name = f"DFT_{c_idx}"
         j_partners = []
@@ -339,19 +356,17 @@ class MatcherTab(QWidget):
                     p_atom = self.mol.GetAtomWithIdx(p_c_idx)
                     j_partner_protons.extend([n.GetIdx() for n in p_atom.GetNeighbors() if n.GetSymbol() == 'H'])
 
-        # Настраиваем палитру цветов
         colors = {}
-        colors[c_idx] = (1.0, 0.25, 0.0)             # Выбранный атом (Ярко-красно-оранжевый)
+        colors[c_idx] = (1.0, 0.25, 0.0)
         for h in own_protons:
-            colors[h] = (1.0, 0.65, 0.0)             # Его протоны (Янтарный)
+            colors[h] = (1.0, 0.65, 0.0)
         for b in bonded_neighbors:
-            colors[b] = (0.12, 0.55, 1.0)            # Химически связанные соседи (Синий)
+            colors[b] = (0.12, 0.55, 1.0)
         for jp in j_partners:
-            colors[jp] = (0.15, 0.80, 0.30)          # J-спиновые партнеры DFT (Изумрудно-зеленый)
+            colors[jp] = (0.15, 0.80, 0.30)
         for jph in j_partner_protons:
-            colors[jph] = (0.45, 0.90, 0.20)         # Протоны J-партнеров (Салатовый)
+            colors[jph] = (0.45, 0.90, 0.20)
 
-        # Подсвечиваем связи к соседям
         highlight_bonds = []
         for b in bonded_neighbors:
             bond = self.mol.GetBondBetweenAtoms(c_idx, b)
@@ -365,7 +380,6 @@ class MatcherTab(QWidget):
         all_highlight_atoms = list(colors.keys())
         self._render_mol(highlights=all_highlight_atoms, highlight_colors=colors, highlight_bonds=highlight_bonds)
 
-        # Выводим подсказку в интерфейс
         bonded_str = ", ".join([f"{self.mol.GetAtomWithIdx(b).GetSymbol()}_{b}" for b in bonded_neighbors]) or "нет"
         j_str = ", ".join(j_info_list) or "нет"
         self.lbl_info.setText(f"Выбран C_{c_idx} | Связан с: {bonded_str} | J-партнеры DFT: {j_str}")
@@ -414,6 +428,9 @@ class MatcherTab(QWidget):
         if c_idx is not None:
             self.highlight_atom_and_connections(c_idx)
 
+        if self.table.currentColumn() == 4:
+            self.zoom_to_exp_node_at_row(row)
+
     def on_mol_atom_clicked(self, atom_idx: int):
         if not self.mol or atom_idx >= self.mol.GetNumAtoms():
             return
@@ -435,6 +452,7 @@ class MatcherTab(QWidget):
         elif node_id.startswith("DFT_"):
             c_idx = int(node_id.replace("DFT_", ""))
         elif node_id.startswith("EXP_"):
+            self.canvas_exp.zoom_to_node(node_id)
             for r in range(self.table.rowCount()):
                 combo = self.table.cellWidget(r, 3)
                 if combo and combo.currentData() == node_id:

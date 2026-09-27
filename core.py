@@ -28,7 +28,7 @@ NODE_COLORS = {
 
 
 class ScrollableListView(QListView):
-    """Список, который гарантированно прокручивается колесом мыши в QTableWidget."""
+    """Список с гарантированной прокруткой колесом мыши."""
     def wheelEvent(self, event):
         delta = event.angleDelta().y()
         if delta != 0:
@@ -42,7 +42,7 @@ class ScrollableListView(QListView):
 
 
 class ScrollableComboBox(QComboBox):
-    """Выпадающий список с гарантированной прокруткой и широким удобным скроллбаром."""
+    """Выпадающий список с гарантированной прокруткой и широким скроллбаром."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -137,7 +137,7 @@ class GraphNodeItem(QGraphicsObject):
         grad.setColorAt(1.0, base_color.darker(125))
 
         pen_color = QColor('#0D47A1') if self.is_hovered else QColor('#263238')
-        pen_width = 3.0 if self.is_hovered else 2.0
+        pen_width = 3.5 if self.is_hovered else 2.0
 
         painter.setPen(QPen(pen_color, pen_width))
         painter.setBrush(QBrush(grad))
@@ -278,6 +278,7 @@ class InteractiveGraphCanvas(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setStyleSheet("background-color: #FAFAFA; border: 1px solid #ECEFF1; border-radius: 4px;")
+        self.node_items = {}
 
     def wheelEvent(self, event):
         zoom_factor = 1.15
@@ -288,27 +289,38 @@ class InteractiveGraphCanvas(QGraphicsView):
 
     def set_graph(self, nodes_dict: Dict[str, dict], edges_list: list, has_weights: bool = False):
         self.scene.clear()
+        self.node_items = {}
         if not nodes_dict:
             return
         node_keys = list(nodes_dict.keys())
         edge_pairs = [(e[0], e[1]) if has_weights else e for e in edges_list]
         pos = calculate_spring_layout(node_keys, edge_pairs)
         dist_scale = 145.0
-        node_items = {}
         for k in node_keys:
             p = pos.get(k, np.array([0.0, 0.0]))
             item = GraphNodeItem(k, nodes_dict[k], p[0] * dist_scale, p[1] * dist_scale)
             item.clicked.connect(self.nodeClicked.emit)
             self.scene.addItem(item)
-            node_items[k] = item
+            self.node_items[k] = item
         for e in edges_list:
             u_key, v_key = e[0], e[1]
             j_val = e[2] if has_weights and len(e) >= 3 else None
-            if u_key in node_items and v_key in node_items:
-                self.scene.addItem(GraphEdgeItem(node_items[u_key], node_items[v_key], j_val))
+            if u_key in self.node_items and v_key in self.node_items:
+                self.scene.addItem(GraphEdgeItem(self.node_items[u_key], self.node_items[v_key], j_val))
         rect = self.scene.itemsBoundingRect().adjusted(-120, -120, 120, 120)
         self.scene.setSceneRect(rect)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def zoom_to_node(self, node_id: str, scale_factor: float = 1.35):
+        """Центрирует и масштабирует холст на выбранном узле графа."""
+        if hasattr(self, 'node_items') and node_id in self.node_items:
+            item = self.node_items[node_id]
+            self.resetTransform()
+            self.scale(scale_factor, scale_factor)
+            self.centerOn(item)
+            for nid, nitem in self.node_items.items():
+                nitem.is_hovered = (nid == node_id)
+                nitem.update()
 
 
 class DataParsers:
@@ -354,7 +366,6 @@ class DataParsers:
             if atom.GetSymbol() == 'C':
                 h_nbrs = [n.GetIdx() for n in atom.GetNeighbors() if n.GetSymbol() == 'H']
                 if h_nbrs:
-                    # Нормализуем: CH вместо CH1, чтобы всегда совпадало с экспериментом
                     t_name = "CH" if len(h_nbrs) == 1 else f"CH{len(h_nbrs)}"
                     rd_nodes[f"C_{atom.GetIdx()}"] = {
                         "label": f"C {atom.GetIdx()}\n({t_name})",
@@ -448,7 +459,6 @@ class DataParsers:
 
     @staticmethod
     def parse_exp(exp1d_text: str, hsqc_text: str, cosy_text: str, c_tol: float, cosy_min_area: float, j_tol: float, ignore_artifacts: bool):
-        # 1. 1D 1H
         peaks_1d = []
         for m in re.finditer(r'(?:δ\s*)?(?P<shift>\d+\.\d+)(?:\s*[–-]\s*(?P<shift2>\d+\.\d+))?\s*\(\s*(?P<mult>[a-zA-Z]+)(?:,\s*J\s*=\s*(?P<couplings>[\d\.,\s]+)\s*Hz)?(?:,\s*(?P<integ>\d+)H)?\s*\)', exp1d_text):
             s1 = float(m.group('shift'))
@@ -465,7 +475,6 @@ class DataParsers:
                 'is_m': mult == 'm'
             })
 
-        # 2. HSQC: Знак фазы определяет CH2!
         hsqc_raw = []
         for line in hsqc_text.splitlines():
             line_str = line.strip().lower()
@@ -490,7 +499,6 @@ class DataParsers:
         exp_nodes = {}
         idx = 0
 
-        # А) CH2 группы (строго по отрицательной фазе)
         paired_neg = set()
         ch2_groups = []
 
@@ -555,7 +563,6 @@ class DataParsers:
             }
             idx += 1
 
-        # Б) CH и CH3 (по положительной фазе)
         for p in pos_peaks:
             matched_p = min(peaks_1d, key=lambda x: abs(x['shift'] - p['h']), default=None)
             integ = matched_p['integ'] if (matched_p and abs(matched_p['shift'] - p['h']) < 0.08) else 1
@@ -563,7 +570,6 @@ class DataParsers:
             is_m = matched_p['is_m'] if matched_p else False
             n_j = matched_p['j_vals'] if matched_p else []
 
-            # CH3: строго синглет при 3.87 или чистый синглет с 3H (перекрытый мультиплет не может быть CH3)
             is_ch3 = (54.0 <= p['c'] <= 57.0 and 3.75 <= p['h'] <= 4.0) or (integ >= 3 and is_s and not is_m)
             g_type = "CH3" if is_ch3 else "CH"
 
@@ -583,7 +589,6 @@ class DataParsers:
             h_str = ", ".join([f"{h:.2f}" for h in v['h_list']])
             exp_nodes[k]['label'] = f"{h_str}\n{v['c']:.1f} ({v['type']})"
 
-        # 3. COSY
         cosy = []
         for line in cosy_text.splitlines():
             toks = line.strip().split()
