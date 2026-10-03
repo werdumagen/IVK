@@ -186,8 +186,8 @@ class MoleculeData:
 class NOESYStudioPro(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("2D NOESY Studio Pro | Multi-Molecule & 1D Projections")
-        self.resize(1500, 920)
+        self.setWindowTitle("2D NOESY Studio Pro | Multi-Molecule & Threshold Filtering")
+        self.resize(1520, 920)
         self.apply_dark_theme()
 
         self.molecules = []
@@ -199,6 +199,7 @@ class NOESYStudioPro(QMainWindow):
         self.freq_mhz = 600.0
         self.fwhm = 0.035
         self.suppress_diag = False
+        self.noe_cutoff_pct = 0.10  # Поріг відсікання NOE у % (за замовчуванням 0.10%)
         self.cmap_name = "Blues_r"
 
         self.init_ui()
@@ -344,7 +345,7 @@ class NOESYStudioPro(QMainWindow):
         split_data = QSplitter(Qt.Orientation.Horizontal)
         td_layout.addWidget(split_data)
 
-        # Ліва колонка: Молекули
+        # Список молекул
         left_box = QWidget()
         lb_layout = QVBoxLayout(left_box)
         lb_layout.setContentsMargins(0, 0, 8, 0)
@@ -374,7 +375,7 @@ class NOESYStudioPro(QMainWindow):
         left_box.setMinimumWidth(260)
         split_data.addWidget(left_box)
 
-        # Права колонка: Редагування
+        # Редагування
         right_box = QWidget()
         rb_layout = QVBoxLayout(right_box)
         rb_layout.setContentsMargins(8, 0, 0, 0)
@@ -388,7 +389,6 @@ class NOESYStudioPro(QMainWindow):
 
         inputs_row = QHBoxLayout()
 
-        # Поле зсувів
         box_nmr = QGroupBox("1. Хімічні зсуви (1H NMR)")
         bn_layout = QVBoxLayout(box_nmr)
         self.txt_shifts = QTextEdit()
@@ -403,7 +403,6 @@ class NOESYStudioPro(QMainWindow):
         bn_layout.addWidget(self.txt_shifts)
         inputs_row.addWidget(box_nmr)
 
-        # Поле XYZ
         box_xyz = QGroupBox("2. 3D Координати (XYZ з ORCA / Avogadro)")
         bx_layout = QVBoxLayout(box_xyz)
         self.txt_xyz = QTextEdit()
@@ -427,7 +426,6 @@ class NOESYStudioPro(QMainWindow):
         btn_parse.clicked.connect(self.parse_and_build_table)
         rb_layout.addWidget(btn_parse)
 
-        # Таблиця зіставлених атомів
         box_tbl = QGroupBox("3. Зіставлені атоми та координати")
         bt_layout = QVBoxLayout(box_tbl)
 
@@ -465,14 +463,13 @@ class NOESYStudioPro(QMainWindow):
         self.tabs.addTab(tab_data, "📝 1. Введення геометрій та зсувів")
 
         # -------------------------------------------------------------
-        # ВКЛАДКА 2: 2D NOESY З 1D ПРОЕКЦІЯМИ НА ОСЯХ
+        # ВКЛАДКА 2: 2D NOESY З 1D ПРОЕКЦІЯМИ ТА ВІДСІКАННЯМ NOE
         # -------------------------------------------------------------
         tab_single = QWidget()
         ts_layout = QHBoxLayout(tab_single)
         split_single = QSplitter(Qt.Orientation.Horizontal)
         ts_layout.addWidget(split_single)
 
-        # Панель налаштувань
         p_ctrl = QWidget()
         pc_vbox = QVBoxLayout(p_ctrl)
         pc_vbox.setContentsMargins(0, 0, 8, 0)
@@ -526,8 +523,24 @@ class NOESYStudioPro(QMainWindow):
 
         pc_vbox.addWidget(param_grp)
 
-        disp_grp = QGroupBox("Візуалізація")
+        # Блок візуалізації та порогу відсікання
+        disp_grp = QGroupBox("Візуалізація та відсікання")
         dg_l = QVBoxLayout(disp_grp)
+
+        # ПОРІГ ВІДСІКАННЯ NOE
+        d_grid = QGridLayout()
+        d_grid.addWidget(QLabel("Відсікати NOE менше за:"), 0, 0)
+        self.lbl_cutoff = QLabel("0.10 %")
+        self.lbl_cutoff.setStyleSheet("color: #ecc94b; font-weight: bold; font-size: 13px;")
+        d_grid.addWidget(self.lbl_cutoff, 0, 1)
+
+        self.sl_cutoff = QSlider(Qt.Orientation.Horizontal)
+        self.sl_cutoff.setRange(0, 300)  # від 0.00% до 3.00%
+        self.sl_cutoff.setValue(10)  # за замовчуванням 0.10%
+        self.sl_cutoff.valueChanged.connect(self.on_params_changed)
+        d_grid.addWidget(self.sl_cutoff, 1, 0, 1, 2)
+        dg_l.addLayout(d_grid)
+
         self.chk_suppress = QCheckBox("Придушити діагональ")
         self.chk_suppress.stateChanged.connect(self.on_params_changed)
         dg_l.addWidget(self.chk_suppress)
@@ -550,7 +563,7 @@ class NOESYStudioPro(QMainWindow):
         p_ctrl.setMinimumWidth(280)
         split_single.addWidget(p_ctrl)
 
-        # Центральна область: Графік NOESY з проекціями
+        # Графік спектра
         center_spec = QWidget()
         cs_l = QVBoxLayout(center_spec)
         self.fig_single = Figure(figsize=(7, 7), facecolor='#16171d')
@@ -563,15 +576,15 @@ class NOESYStudioPro(QMainWindow):
         # Таблиця крос-піків
         right_tbl = QWidget()
         rt_l = QVBoxLayout(right_tbl)
-        rt_grp = QGroupBox("Крос-піки NOE (r < 3.8 Å)")
-        rg_l = QVBoxLayout(rt_grp)
+        self.rt_grp = QGroupBox(f"Крос-піки (NOE ≥ {self.noe_cutoff_pct:.2f}%)")
+        rg_l = QVBoxLayout(self.rt_grp)
         self.table_single_noesy = QTableWidget()
         self.table_single_noesy.setColumnCount(4)
         self.table_single_noesy.setHorizontalHeaderLabels(["Протони", "δ₁ - δ₂ (ppm)", "r (Å)", "NOE (%)"])
         self.table_single_noesy.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table_single_noesy.verticalHeader().setVisible(False)
         rg_l.addWidget(self.table_single_noesy)
-        rt_l.addWidget(rt_grp)
+        rt_l.addWidget(self.rt_grp)
         right_tbl.setMinimumWidth(320)
         split_single.addWidget(right_tbl)
 
@@ -646,12 +659,11 @@ class NOESYStudioPro(QMainWindow):
         if not path.endswith(".json"):
             path += ".json"
 
-        # Зберігаємо дані поточної відкритої таблиці в активну молекулу перед експортом
         if self.current_mol_idx >= 0 and self.current_mol_idx < len(self.molecules):
             self.save_table_to_active_mol()
 
         session_data = {
-            "version": "1.2",
+            "version": "1.3",
             "molecules": [m.to_dict() for m in self.molecules],
             "current_index": self.current_mol_idx,
             "params": {
@@ -660,6 +672,7 @@ class NOESYStudioPro(QMainWindow):
                 "freq_mhz": self.freq_mhz,
                 "fwhm": self.fwhm,
                 "suppress_diag": self.suppress_diag,
+                "noe_cutoff_pct": self.noe_cutoff_pct,
                 "show_1d": self.chk_show_1d.isChecked(),
                 "cmap": self.cmap_name
             }
@@ -697,7 +710,6 @@ class NOESYStudioPro(QMainWindow):
             self.current_mol_idx = cur_idx
             self.list_molecules.setCurrentRow(cur_idx)
 
-            # Відновлюємо налаштування спектрометра
             params = data.get("params", {})
             self.tau_m = params.get("tau_m", 0.500)
             self.sl_tau_m.setValue(int(self.tau_m * 1000))
@@ -716,6 +728,10 @@ class NOESYStudioPro(QMainWindow):
 
             self.suppress_diag = params.get("suppress_diag", False)
             self.chk_suppress.setChecked(self.suppress_diag)
+
+            self.noe_cutoff_pct = params.get("noe_cutoff_pct", 0.10)
+            self.sl_cutoff.setValue(int(self.noe_cutoff_pct * 100))
+            self.lbl_cutoff.setText(f"{self.noe_cutoff_pct:.2f} %")
 
             self.chk_show_1d.setChecked(params.get("show_1d", True))
 
@@ -819,7 +835,7 @@ class NOESYStudioPro(QMainWindow):
         mol.coords = np.array(coords)
 
     # -------------------------------------------------------------------------
-    # РЕДАКТОР ДАНИХ ТА ЗБЕРЕЖЕННЯ
+    # РЕДАКТОР ДАНИХ
     # -------------------------------------------------------------------------
     def load_xyz_file_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Виберіть .xyz файл", "", "XYZ Files (*.xyz);;All Files (*)")
@@ -929,7 +945,7 @@ class NOESYStudioPro(QMainWindow):
         self.tabs.setCurrentIndex(1)
 
     # -------------------------------------------------------------------------
-    # СИМУЛЯЦІЯ ТА ВІДМАЛЬОВУВАННЯ 2D + 1D ПРОЕКЦІЙ
+    # СИМУЛЯЦІЯ ТА ВІДМАЛЬОВУВАННЯ
     # -------------------------------------------------------------------------
     def on_params_changed(self):
         self.tau_m = self.sl_tau_m.value() / 1000.0
@@ -943,6 +959,12 @@ class NOESYStudioPro(QMainWindow):
         self.lbl_fwhm.setText(f"{self.fwhm:.3f} ppm")
 
         self.suppress_diag = self.chk_suppress.isChecked()
+
+        # Оновлення порогу відсікання NOE
+        self.noe_cutoff_pct = self.sl_cutoff.value() / 100.0
+        self.lbl_cutoff.setText(f"{self.noe_cutoff_pct:.2f} %")
+        self.rt_grp.setTitle(f"Крос-піки (NOE ≥ {self.noe_cutoff_pct:.2f}%)")
+
         self.cmap_name = self.cb_cmap.currentText()
 
         self.update_single_simulation()
@@ -983,10 +1005,11 @@ class NOESYStudioPro(QMainWindow):
             for j in range(i + 1, N):
                 r = distances[i, j]
                 noe_pct = abs(intensities[i, j] / diag_ref) * 100.0
-                if r < 3.8:
+                # ВІДСІКАННЯ: додаємо лише ті контакти, які перевищують поріг
+                if r < 3.8 and noe_pct >= self.noe_cutoff_pct:
                     peaks.append((labels[i], labels[j], shifts[i], shifts[j], r, noe_pct))
 
-        peaks.sort(key=lambda x: x[4])
+        peaks.sort(key=lambda x: x[4])  # сортуємо за найкоротшою відстанню r
         table_widget.setRowCount(len(peaks))
 
         for row, (l1, l2, s1, s2, r, noe) in enumerate(peaks):
@@ -1013,7 +1036,6 @@ class NOESYStudioPro(QMainWindow):
         grid_res = 280
         ppm_grid = np.linspace(ppm_min, ppm_max, grid_res)
 
-        # Розрахунок 1D симульованого спектра
         spec_1d = np.zeros_like(ppm_grid)
         for s in shifts:
             spec_1d += np.exp(-4.0 * np.log(2) * ((ppm_grid - s) ** 2) / (self.fwhm ** 2))
@@ -1022,7 +1044,6 @@ class NOESYStudioPro(QMainWindow):
         show_projections = self.chk_show_1d.isChecked()
 
         if show_projections:
-            # Створюємо GridSpec з осями: верхня 1D, ліва 1D, центральна 2D
             gs = self.fig_single.add_gridspec(
                 2, 2,
                 width_ratios=[1.1, 5.5],
@@ -1038,7 +1059,7 @@ class NOESYStudioPro(QMainWindow):
             ax_left = self.fig_single.add_subplot(gs[1, 0])
             ax_main = self.fig_single.add_subplot(gs[1, 1], sharex=ax_top, sharey=ax_left)
 
-            # 1. Верхній 1D спектр (F2)
+            # Верхня 1D проекція
             ax_top.set_facecolor("#16171d")
             ax_top.plot(ppm_grid, spec_1d, color="#63b3ed", lw=1.2)
             ax_top.fill_between(ppm_grid, 0, spec_1d, color="#3182ce", alpha=0.25)
@@ -1049,11 +1070,11 @@ class NOESYStudioPro(QMainWindow):
             for sp in ax_top.spines.values():
                 sp.set_color("#2d3748")
 
-            # 2. Лівий 1D спектр (F1 - повернутий)
+            # Ліва 1D проекція
             ax_left.set_facecolor("#16171d")
             ax_left.plot(spec_1d, ppm_grid, color="#63b3ed", lw=1.2)
             ax_left.fill_betweenx(ppm_grid, 0, spec_1d, color="#3182ce", alpha=0.25)
-            ax_left.set_xlim(max_1d * 1.15, 0)  # спрямовуємо базову лінію вліво
+            ax_left.set_xlim(max_1d * 1.15, 0)
             ax_left.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
             for sp in ax_left.spines.values():
                 sp.set_color("#2d3748")
@@ -1062,20 +1083,29 @@ class NOESYStudioPro(QMainWindow):
             ax_main.set_title(f"{title} (600 MHz, τₘ={int(self.tau_m * 1000)} ms)", color="#63b3ed", fontsize=11,
                               fontweight='bold')
 
-        # 3. Центральний 2D спектр
+        # 2D Контурний спектр
         ax_main.set_facecolor("#111216")
         X, Y = np.meshgrid(ppm_grid, ppm_grid)
         Z = np.zeros_like(X)
 
+        diag_ref = np.median(np.diag(intensities)) if N > 0 else 1.0
+
         for i in range(N):
             for j in range(N):
-                amp = intensities[i, j]
-                if i == j and self.suppress_diag:
-                    amp = 0.0
+                if i == j:
+                    amp = 0.0 if self.suppress_diag else intensities[i, j]
+                else:
+                    noe_pct = abs(intensities[i, j] / diag_ref) * 100.0
+                    # ВІДСІКАННЯ: якщо сигнал менший за поріг, він повністю зануляється
+                    if noe_pct < self.noe_cutoff_pct:
+                        amp = 0.0
+                    else:
+                        amp = intensities[i, j]
 
-                Z += amp * np.exp(-4.0 * np.log(2) * (
-                        ((X - shifts[i]) ** 2 + (Y - shifts[j]) ** 2) / (self.fwhm ** 2)
-                ))
+                if amp != 0.0:
+                    Z += amp * np.exp(-4.0 * np.log(2) * (
+                            ((X - shifts[i]) ** 2 + (Y - shifts[j]) ** 2) / (self.fwhm ** 2)
+                    ))
 
         Z_abs = np.abs(Z)
         max_val = np.max(Z_abs)
@@ -1087,10 +1117,8 @@ class NOESYStudioPro(QMainWindow):
             except Exception:
                 pass
 
-        # Діагональ
         ax_main.plot([ppm_min, ppm_max], [ppm_min, ppm_max], color="#4a5568", linestyle="--", linewidth=0.8, alpha=0.7)
 
-        # Підписи унікальних зсувів
         unique_shifts = {}
         for s, l in zip(shifts, labels):
             s_round = round(s, 2)
@@ -1201,15 +1229,23 @@ class NOESYStudioPro(QMainWindow):
         X, Y = np.meshgrid(ppm_grid, ppm_grid)
         Z = np.zeros_like(X)
 
+        diag_ref = np.median(np.diag(intensities)) if N > 0 else 1.0
+
         for i in range(N):
             for j in range(N):
-                amp = intensities[i, j]
-                if i == j and self.suppress_diag:
-                    amp = 0.0
+                if i == j:
+                    amp = 0.0 if self.suppress_diag else intensities[i, j]
+                else:
+                    noe_pct = abs(intensities[i, j] / diag_ref) * 100.0
+                    if noe_pct < self.noe_cutoff_pct:
+                        amp = 0.0
+                    else:
+                        amp = intensities[i, j]
 
-                Z += amp * np.exp(-4.0 * np.log(2) * (
-                        ((X - shifts[i]) ** 2 + (Y - shifts[j]) ** 2) / (self.fwhm ** 2)
-                ))
+                if amp != 0.0:
+                    Z += amp * np.exp(-4.0 * np.log(2) * (
+                            ((X - shifts[i]) ** 2 + (Y - shifts[j]) ** 2) / (self.fwhm ** 2)
+                    ))
 
         Z_abs = np.abs(Z)
         max_val = np.max(Z_abs)
