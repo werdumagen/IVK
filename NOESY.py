@@ -1,8 +1,11 @@
 import sys
+import os
+import json
 import re
 import numpy as np
 import scipy.linalg as la
 
+# Підтримка PyQt6 та PyQt5
 try:
     from PyQt6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -33,9 +36,6 @@ from matplotlib.figure import Figure
 # 1. ПАРСЕРИ ТА КОРЕКТНА ОБРОБКА CH3
 # -----------------------------------------------------------------------------
 def parse_nmr_text_with_multiplicity(text):
-    """
-    Парсить спектр з урахуванням інтегралів (1H, 2H, 3H) і розгортає 3H на 3 атоми.
-    """
     expanded_shifts = []
     expanded_labels = []
 
@@ -47,7 +47,7 @@ def parse_nmr_text_with_multiplicity(text):
         for m in matches:
             shift = float(m.group(1))
             n_h = int(m.group(2))
-            base_lbl = m.group(3).strip() if m.group(3) else f"H"
+            base_lbl = m.group(3).strip() if m.group(3) else "H"
             base_lbl = re.sub(r'[^\w()]+', '', base_lbl).strip()
 
             if n_h == 1:
@@ -66,7 +66,6 @@ def parse_nmr_text_with_multiplicity(text):
         for m in matches_short:
             shift = float(m.group(1))
             tag = m.group(2).strip()
-            # Перевіряємо, чи в кінці стоїть H3 / 3H
             m_h3 = re.search(r'(\d+)H|H(\d+)', tag, re.IGNORECASE)
             n_h = 1
             if m_h3:
@@ -83,7 +82,7 @@ def parse_nmr_text_with_multiplicity(text):
                     expanded_labels.append(f"{tag}_{chr(97 + k)}")
         return expanded_shifts, expanded_labels
 
-    # 3. Якщо просто числа
+    # 3. Числа через кому / пробіл
     floats = re.findall(r'\d+\.\d+', text)
     for i, f in enumerate(floats):
         expanded_shifts.append(float(f))
@@ -93,9 +92,6 @@ def parse_nmr_text_with_multiplicity(text):
 
 
 def parse_xyz_only_hydrogens(text):
-    """
-    Виділяє координати лише атомів гідрогену (H) з вихідного XYZ.
-    """
     lines = text.strip().splitlines()
     coords = []
     for line in lines:
@@ -116,7 +112,7 @@ def parse_xyz_only_hydrogens(text):
 
 
 # -----------------------------------------------------------------------------
-# 2. ФІЗИЧНИЙ МОДУЛЬ РОЗРАХУНКУ РЕЛАКСАЦІЇ NOESY
+# 2. МАТЕМАТИЧНИЙ МОДУЛЬ РОЗРАХУНКУ РЕЛАКСАЦІЇ NOESY
 # -----------------------------------------------------------------------------
 def calculate_noesy(shifts, coords, tau_m=0.500, tau_c_ps=80.0, freq_mhz=600.0, rho_leak=0.15):
     N = len(shifts)
@@ -158,7 +154,7 @@ def calculate_noesy(shifts, coords, tau_m=0.500, tau_c_ps=80.0, freq_mhz=600.0, 
 
 
 # -----------------------------------------------------------------------------
-# 3. КЛАС СТРУКТУРИ ДАНИХ МОЛЕКУЛИ
+# 3. МОДЕЛЬ ДАНИХ ТА СЕРІАЛІЗАЦІЯ СЕСІЇ
 # -----------------------------------------------------------------------------
 class MoleculeData:
     def __init__(self, name="Нова молекула"):
@@ -167,22 +163,37 @@ class MoleculeData:
         self.shifts = np.array([])
         self.coords = np.empty((0, 3))
 
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "labels": list(self.labels),
+            "shifts": self.shifts.tolist() if isinstance(self.shifts, np.ndarray) else list(self.shifts),
+            "coords": self.coords.tolist() if isinstance(self.coords, np.ndarray) else list(self.coords)
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        mol = cls(d.get("name", "Молекула"))
+        mol.labels = d.get("labels", [])
+        mol.shifts = np.array(d.get("shifts", []))
+        mol.coords = np.array(d.get("coords", []))
+        return mol
+
 
 # -----------------------------------------------------------------------------
 # 4. ГОЛОВНЕ ВІКНО ДОДАТКА
 # -----------------------------------------------------------------------------
-class NOESYStudioApp(QMainWindow):
+class NOESYStudioPro(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("2D NOESY Workspace & Multi-Molecule Comparison")
-        self.resize(1450, 900)
+        self.setWindowTitle("2D NOESY Studio Pro | Multi-Molecule & 1D Projections")
+        self.resize(1500, 920)
         self.apply_dark_theme()
 
-        # Список молекул
         self.molecules = []
         self.current_mol_idx = -1
 
-        # Параметри спектрометра
+        # Параметри за замовчуванням
         self.tau_m = 0.500
         self.tau_c_ps = 80.0
         self.freq_mhz = 600.0
@@ -191,8 +202,6 @@ class NOESYStudioApp(QMainWindow):
         self.cmap_name = "Blues_r"
 
         self.init_ui()
-
-        # Починаємо з чистої молекули без попередньо заповнених даних
         self.add_new_molecule("Молекула 1")
 
     def apply_dark_theme(self):
@@ -303,18 +312,39 @@ class NOESYStudioApp(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
+        # -------------------------------------------------------------
+        # ВЕРХНІЙ ТУЛБАР: ЗБЕРЕЖЕННЯ ТА ЗАВАНТАЖЕННЯ СЕСІЙ
+        # -------------------------------------------------------------
+        session_bar = QHBoxLayout()
+        session_title = QLabel("💾 Проект сесії:")
+        session_title.setStyleSheet("font-weight: bold; color: #63b3ed;")
+        session_bar.addWidget(session_title)
+
+        btn_save_session = QPushButton("💾 Зберегти сесію (.json)")
+        btn_save_session.setStyleSheet("background-color: #2c5282;")
+        btn_save_session.clicked.connect(self.save_session_dialog)
+        session_bar.addWidget(btn_save_session)
+
+        btn_load_session = QPushButton("📂 Відкрити сесію (.json)")
+        btn_load_session.setStyleSheet("background-color: #2c5282;")
+        btn_load_session.clicked.connect(self.load_session_dialog)
+        session_bar.addWidget(btn_load_session)
+
+        session_bar.addStretch()
+        main_layout.addLayout(session_bar)
+
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # ---------------------------------------------------------------------
-        # ВКЛАДКА 1: МЕНЕДЖЕР МОЛЕКУЛ ТА ВВЕДЕННЯ ДАНИХ (СТАРТОВА)
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------
+        # ВКЛАДКА 1: ВВЕДЕННЯ ТА РЕДАКТОР ДАНИХ
+        # -------------------------------------------------------------
         tab_data = QWidget()
         td_layout = QHBoxLayout(tab_data)
         split_data = QSplitter(Qt.Orientation.Horizontal)
         td_layout.addWidget(split_data)
 
-        # Ліва колонка: список молекул
+        # Ліва колонка: Молекули
         left_box = QWidget()
         lb_layout = QVBoxLayout(left_box)
         lb_layout.setContentsMargins(0, 0, 8, 0)
@@ -344,12 +374,11 @@ class NOESYStudioApp(QMainWindow):
         left_box.setMinimumWidth(260)
         split_data.addWidget(left_box)
 
-        # Права колонка: редагування обраної молекули
+        # Права колонка: Редагування
         right_box = QWidget()
         rb_layout = QVBoxLayout(right_box)
         rb_layout.setContentsMargins(8, 0, 0, 0)
 
-        # Назва молекули
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("Назва молекули:"))
         self.edit_mol_name = QLineEdit()
@@ -357,10 +386,9 @@ class NOESYStudioApp(QMainWindow):
         name_row.addWidget(self.edit_mol_name)
         rb_layout.addLayout(name_row)
 
-        # Введення тексту зсувів і XYZ
         inputs_row = QHBoxLayout()
 
-        # Зсуви
+        # Поле зсувів
         box_nmr = QGroupBox("1. Хімічні зсуви (1H NMR)")
         bn_layout = QVBoxLayout(box_nmr)
         self.txt_shifts = QTextEdit()
@@ -375,7 +403,7 @@ class NOESYStudioApp(QMainWindow):
         bn_layout.addWidget(self.txt_shifts)
         inputs_row.addWidget(box_nmr)
 
-        # XYZ
+        # Поле XYZ
         box_xyz = QGroupBox("2. 3D Координати (XYZ з ORCA / Avogadro)")
         bx_layout = QVBoxLayout(box_xyz)
         self.txt_xyz = QTextEdit()
@@ -399,7 +427,7 @@ class NOESYStudioApp(QMainWindow):
         btn_parse.clicked.connect(self.parse_and_build_table)
         rb_layout.addWidget(btn_parse)
 
-        # Таблиця атомів
+        # Таблиця зіставлених атомів
         box_tbl = QGroupBox("3. Зіставлені атоми та координати")
         bt_layout = QVBoxLayout(box_tbl)
 
@@ -409,7 +437,6 @@ class NOESYStudioApp(QMainWindow):
         self.table_atoms.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         bt_layout.addWidget(self.table_atoms)
 
-        # Кнопки для таблиці (включаючи фікс для CH3)
         row_btns = QHBoxLayout()
         btn_add_r = QPushButton("➕ Додати рядок")
         btn_add_r.clicked.connect(self.add_table_row)
@@ -419,7 +446,7 @@ class NOESYStudioApp(QMainWindow):
         btn_del_r.clicked.connect(self.delete_table_row)
         row_btns.addWidget(btn_del_r)
 
-        btn_group_ch3 = QPushButton("🔗 Згрупувати виділені у CH3 (задати однаковий δ)")
+        btn_group_ch3 = QPushButton("🔗 Згрупувати виділені у CH3")
         btn_group_ch3.setStyleSheet("background-color: #805ad5;")
         btn_group_ch3.clicked.connect(self.group_selected_to_ch3)
         row_btns.addWidget(btn_group_ch3)
@@ -428,8 +455,7 @@ class NOESYStudioApp(QMainWindow):
         bt_layout.addLayout(row_btns)
         rb_layout.addWidget(box_tbl)
 
-        # Зберегти молекулу
-        btn_save_mol = QPushButton("💾 ЗБЕРЕГТИ ДАНІ ТА РОЗРАХУВАТИ NOESY")
+        btn_save_mol = QPushButton("💾 ЗБЕРЕГТИ ТА РОЗРАХУВАТИ NOESY СПЕКТР")
         btn_save_mol.setStyleSheet("background-color: #38a169; font-size: 14px; font-weight: bold; padding: 10px;")
         btn_save_mol.clicked.connect(self.save_and_calculate_current)
         rb_layout.addWidget(btn_save_mol)
@@ -438,9 +464,9 @@ class NOESYStudioApp(QMainWindow):
         split_data.setSizes([260, 1100])
         self.tabs.addTab(tab_data, "📝 1. Введення геометрій та зсувів")
 
-        # ---------------------------------------------------------------------
-        # ВКЛАДКА 2: ОДИНИЧНИЙ СПЕКТР NOESY
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------
+        # ВКЛАДКА 2: 2D NOESY З 1D ПРОЕКЦІЯМИ НА ОСЯХ
+        # -------------------------------------------------------------
         tab_single = QWidget()
         ts_layout = QHBoxLayout(tab_single)
         split_single = QSplitter(Qt.Orientation.Horizontal)
@@ -451,7 +477,6 @@ class NOESYStudioApp(QMainWindow):
         pc_vbox = QVBoxLayout(p_ctrl)
         pc_vbox.setContentsMargins(0, 0, 8, 0)
 
-        # Вибір поточної молекули для перегляду
         sel_grp = QGroupBox("Молекула")
         sg_l = QVBoxLayout(sel_grp)
         self.combo_single_mol = QComboBox()
@@ -459,7 +484,6 @@ class NOESYStudioApp(QMainWindow):
         sg_l.addWidget(self.combo_single_mol)
         pc_vbox.addWidget(sel_grp)
 
-        # Параметри спектрометра
         param_grp = QGroupBox("Параметри спектрометра")
         pg_grid = QGridLayout(param_grp)
 
@@ -508,6 +532,11 @@ class NOESYStudioApp(QMainWindow):
         self.chk_suppress.stateChanged.connect(self.on_params_changed)
         dg_l.addWidget(self.chk_suppress)
 
+        self.chk_show_1d = QCheckBox("Показувати 1D проекції на осях")
+        self.chk_show_1d.setChecked(True)
+        self.chk_show_1d.stateChanged.connect(self.on_params_changed)
+        dg_l.addWidget(self.chk_show_1d)
+
         h_cm = QHBoxLayout()
         h_cm.addWidget(QLabel("Палітра:"))
         self.cb_cmap = QComboBox()
@@ -521,12 +550,11 @@ class NOESYStudioApp(QMainWindow):
         p_ctrl.setMinimumWidth(280)
         split_single.addWidget(p_ctrl)
 
-        # Графік спектра
+        # Центральна область: Графік NOESY з проекціями
         center_spec = QWidget()
         cs_l = QVBoxLayout(center_spec)
-        self.fig_single = Figure(figsize=(6, 6), facecolor='#16171d')
+        self.fig_single = Figure(figsize=(7, 7), facecolor='#16171d')
         self.canvas_single = FigureCanvas(self.fig_single)
-        self.ax_single = self.fig_single.add_subplot(111)
         self.tb_single = NavigationToolbar(self.canvas_single, self)
         cs_l.addWidget(self.tb_single)
         cs_l.addWidget(self.canvas_single)
@@ -547,16 +575,15 @@ class NOESYStudioApp(QMainWindow):
         right_tbl.setMinimumWidth(320)
         split_single.addWidget(right_tbl)
 
-        split_single.setSizes([280, 700, 360])
-        self.tabs.addTab(tab_single, "📊 2. 2D NOESY Спектр")
+        split_single.setSizes([280, 740, 360])
+        self.tabs.addTab(tab_single, "📊 2. 2D NOESY Спектр (+1D Проекції)")
 
-        # ---------------------------------------------------------------------
-        # ВКЛАДКА 3: ПОРІВНЯННЯ МОЛЕКУЛ (SIDE-BY-SIDE)
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------
+        # ВКЛАДКА 3: ПОРІВНЯННЯ МОЛЕКУЛ
+        # -------------------------------------------------------------
         tab_compare = QWidget()
         tc_layout = QVBoxLayout(tab_compare)
 
-        # Верхній селектор двох молекул
         top_cmp = QHBoxLayout()
         top_cmp.addWidget(QLabel("Молекула А:"))
         self.cb_cmp_a = QComboBox()
@@ -575,10 +602,8 @@ class NOESYStudioApp(QMainWindow):
         top_cmp.addStretch()
         tc_layout.addLayout(top_cmp)
 
-        # Два графіки поруч
         spec_split = QSplitter(Qt.Orientation.Horizontal)
 
-        # Лівий графік (Мол А)
         w_left = QWidget()
         wl_l = QVBoxLayout(w_left)
         self.fig_cmp_a = Figure(figsize=(5, 5), facecolor='#16171d')
@@ -587,7 +612,6 @@ class NOESYStudioApp(QMainWindow):
         wl_l.addWidget(self.canvas_cmp_a)
         spec_split.addWidget(w_left)
 
-        # Правий графік (Мол Б)
         w_right = QWidget()
         wr_l = QVBoxLayout(w_right)
         self.fig_cmp_b = Figure(figsize=(5, 5), facecolor='#16171d')
@@ -598,7 +622,6 @@ class NOESYStudioApp(QMainWindow):
 
         tc_layout.addWidget(spec_split, stretch=3)
 
-        # Таблиця діагностичних різниць
         diff_grp = QGroupBox("Діагностичні різниці просторових контактів (Δr > 0.8 Å)")
         dg_layout = QVBoxLayout(diff_grp)
         self.table_diff = QTableWidget()
@@ -612,6 +635,100 @@ class NOESYStudioApp(QMainWindow):
         tc_layout.addWidget(diff_grp, stretch=2)
 
         self.tabs.addTab(tab_compare, "⚖️ 3. Порівняння молекул")
+
+    # -------------------------------------------------------------------------
+    # ЗБЕРЕЖЕННЯ ТА ВІДКРИТТЯ СЕСІЇ (.JSON)
+    # -------------------------------------------------------------------------
+    def save_session_dialog(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Зберегти сесію проекту", "", "NOESY Session (*.json)")
+        if not path:
+            return
+        if not path.endswith(".json"):
+            path += ".json"
+
+        # Зберігаємо дані поточної відкритої таблиці в активну молекулу перед експортом
+        if self.current_mol_idx >= 0 and self.current_mol_idx < len(self.molecules):
+            self.save_table_to_active_mol()
+
+        session_data = {
+            "version": "1.2",
+            "molecules": [m.to_dict() for m in self.molecules],
+            "current_index": self.current_mol_idx,
+            "params": {
+                "tau_m": self.tau_m,
+                "tau_c_ps": self.tau_c_ps,
+                "freq_mhz": self.freq_mhz,
+                "fwhm": self.fwhm,
+                "suppress_diag": self.suppress_diag,
+                "show_1d": self.chk_show_1d.isChecked(),
+                "cmap": self.cmap_name
+            }
+        }
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(session_data, f, indent=2, ensure_ascii=False)
+            QMessageBox.information(self, "Успіх", f"Сесію успішно збережено у:\n{os.path.basename(path)}")
+        except Exception as e:
+            QMessageBox.critical(self, "Помилка", f"Не вдалося зберегти сесію: {e}")
+
+    def load_session_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Відкрити файл сесії", "", "NOESY Session (*.json);;All Files (*)")
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            mol_list = data.get("molecules", [])
+            if not mol_list:
+                QMessageBox.warning(self, "Помилка", "Файл сесії не містить даних молекул.")
+                return
+
+            self.molecules = [MoleculeData.from_dict(m) for m in mol_list]
+            self.list_molecules.blockSignals(True)
+            self.list_molecules.clear()
+            for m in self.molecules:
+                self.list_molecules.addItem(m.name)
+            self.list_molecules.blockSignals(False)
+
+            cur_idx = min(data.get("current_index", 0), len(self.molecules) - 1)
+            self.current_mol_idx = cur_idx
+            self.list_molecules.setCurrentRow(cur_idx)
+
+            # Відновлюємо налаштування спектрометра
+            params = data.get("params", {})
+            self.tau_m = params.get("tau_m", 0.500)
+            self.sl_tau_m.setValue(int(self.tau_m * 1000))
+            self.lbl_tau_m.setText(f"{int(self.tau_m * 1000)} ms")
+
+            self.tau_c_ps = params.get("tau_c_ps", 80.0)
+            self.sl_tau_c.setValue(int(self.tau_c_ps))
+            self.lbl_tau_c.setText(f"{int(self.tau_c_ps)} ps")
+
+            self.freq_mhz = params.get("freq_mhz", 600.0)
+            self.cb_freq.setCurrentText(f"{int(self.freq_mhz)} MHz")
+
+            self.fwhm = params.get("fwhm", 0.035)
+            self.sl_fwhm.setValue(int(self.fwhm * 1000))
+            self.lbl_fwhm.setText(f"{self.fwhm:.3f} ppm")
+
+            self.suppress_diag = params.get("suppress_diag", False)
+            self.chk_suppress.setChecked(self.suppress_diag)
+
+            self.chk_show_1d.setChecked(params.get("show_1d", True))
+
+            self.cmap_name = params.get("cmap", "Blues_r")
+            self.cb_cmap.setCurrentText(self.cmap_name)
+
+            self.sync_combos()
+            self.on_molecule_selected(cur_idx)
+            self.update_single_simulation()
+
+            QMessageBox.information(self, "Сесію відновлено", f"Завантажено {len(self.molecules)} молекул.")
+        except Exception as e:
+            QMessageBox.critical(self, "Помилка", f"Не вдалося прочитати файл сесії: {e}")
 
     # -------------------------------------------------------------------------
     # УПРАВЛІННЯ МОЛЕКУЛАМИ
@@ -672,8 +789,6 @@ class NOESYStudioApp(QMainWindow):
         self.edit_mol_name.blockSignals(True)
         self.edit_mol_name.setText(mol.name)
         self.edit_mol_name.blockSignals(False)
-
-        # Заповнюємо таблицю поточними даними молекули
         self.populate_editor_table(mol.labels, mol.shifts, mol.coords)
 
     def on_molecule_name_changed(self, text):
@@ -684,8 +799,27 @@ class NOESYStudioApp(QMainWindow):
                 item.setText(text)
             self.sync_combos()
 
+    def save_table_to_active_mol(self):
+        rows = self.table_atoms.rowCount()
+        labels, shifts, coords = [], [], []
+        for r in range(rows):
+            lbl_item = self.table_atoms.item(r, 0)
+            s_item = self.table_atoms.item(r, 1)
+            x_item = self.table_atoms.item(r, 2)
+            y_item = self.table_atoms.item(r, 3)
+            z_item = self.table_atoms.item(r, 4)
+            if lbl_item and s_item and x_item and y_item and z_item:
+                labels.append(lbl_item.text().strip())
+                shifts.append(float(s_item.text()))
+                coords.append([float(x_item.text()), float(y_item.text()), float(z_item.text())])
+
+        mol = self.molecules[self.current_mol_idx]
+        mol.labels = labels
+        mol.shifts = np.array(shifts)
+        mol.coords = np.array(coords)
+
     # -------------------------------------------------------------------------
-    # РЕДАКТОР ДАНИХ ТА ВИПРАВЛЕННЯ CH3
+    # РЕДАКТОР ДАНИХ ТА ЗБЕРЕЖЕННЯ
     # -------------------------------------------------------------------------
     def load_xyz_file_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Виберіть .xyz файл", "", "XYZ Files (*.xyz);;All Files (*)")
@@ -694,7 +828,7 @@ class NOESYStudioApp(QMainWindow):
                 content = f.read()
             self.txt_xyz.setPlainText(content)
             coords = parse_xyz_only_hydrogens(content)
-            QMessageBox.information(self, "Файл прочитано", f"Знайдено {len(coords)} атомів гідрогену (H) у файлі.")
+            QMessageBox.information(self, "Файл прочитано", f"Знайдено {len(coords)} атомів гідрогену (H).")
 
     def parse_and_build_table(self):
         nmr_txt = self.txt_shifts.toPlainText().strip()
@@ -710,12 +844,11 @@ class NOESYStudioApp(QMainWindow):
         N_s = len(shifts)
         N_c = len(coords)
 
-        # Якщо розмірності відрізняються, сповіщаємо користувача
         if N_s != N_c and N_s > 0 and N_c > 0:
             QMessageBox.information(
                 self, "Зіставлення",
                 f"Розпізнано:\n• Протонів у спектрі (з урахуванням 3H): {N_s}\n• Атомів H у координатах: {N_c}\n\n"
-                "Дані внесені в таблицю. Перевірте зіставлення перед розрахунком."
+                "Дані внесено в таблицю. Перевірте зіставлення."
             )
 
         N = max(N_s, N_c)
@@ -734,9 +867,6 @@ class NOESYStudioApp(QMainWindow):
             self.table_atoms.setItem(i, 4, QTableWidgetItem(z))
 
     def group_selected_to_ch3(self):
-        """
-        Фікс для CH3: виділені рядки позначаються як метил з однаковим хімічним зсувом.
-        """
         sel_ranges = self.table_atoms.selectedRanges()
         rows = []
         for r in sel_ranges:
@@ -745,17 +875,15 @@ class NOESYStudioApp(QMainWindow):
 
         if len(rows) < 2:
             QMessageBox.information(self, "Підказка",
-                                    "Виділіть мишкою рядки (наприклад, 3 атоми метилу), які мають належати до однієї CH3 групи.")
+                                    "Виділіть рядки (наприклад, 3 атоми метилу), які належать до однієї CH3 групи.")
             return
 
-        # Беремо зсув першого виділеного рядка
         first_shift = self.table_atoms.item(rows[0], 1).text()
         for idx, row in enumerate(rows):
             self.table_atoms.setItem(row, 0, QTableWidgetItem(f"Me(3H)_{chr(97 + idx)}"))
             self.table_atoms.setItem(row, 1, QTableWidgetItem(first_shift))
 
-        QMessageBox.information(self, "CH3 Згруповано",
-                                f"Атомам у рядках {rows} призначено однаковий зсув δ = {first_shift} ppm.")
+        QMessageBox.information(self, "CH3 Згруповано", f"Атомам призначено однаковий зсув δ = {first_shift} ppm.")
 
     def add_table_row(self):
         row = self.table_atoms.rowCount()
@@ -790,33 +918,18 @@ class NOESYStudioApp(QMainWindow):
             QMessageBox.warning(self, "Помилка", "Потрібно щонайменше 2 атоми для розрахунку NOESY!")
             return
 
-        labels, shifts, coords = [], [], []
         try:
-            for r in range(rows):
-                lbl = self.table_atoms.item(r, 0).text().strip()
-                s = float(self.table_atoms.item(r, 1).text())
-                x = float(self.table_atoms.item(r, 2).text())
-                y = float(self.table_atoms.item(r, 3).text())
-                z = float(self.table_atoms.item(r, 4).text())
-                labels.append(lbl)
-                shifts.append(s)
-                coords.append([x, y, z])
+            self.save_table_to_active_mol()
         except Exception as e:
-            QMessageBox.critical(self, "Помилка", f"Перевірте коректність чисел у таблиці: {e}")
+            QMessageBox.critical(self, "Помилка", f"Перевірте коректність чисел: {e}")
             return
 
-        mol = self.molecules[self.current_mol_idx]
-        mol.labels = labels
-        mol.shifts = np.array(shifts)
-        mol.coords = np.array(coords)
-
-        # Перемикаємо на вкладку спектра і рахуємо
         self.combo_single_mol.setCurrentIndex(self.current_mol_idx)
         self.update_single_simulation()
         self.tabs.setCurrentIndex(1)
 
     # -------------------------------------------------------------------------
-    # РОЗРАХУНОК ТА ВІЗУАЛІЗАЦІЯ СПЕКТРА
+    # СИМУЛЯЦІЯ ТА ВІДМАЛЬОВУВАННЯ 2D + 1D ПРОЕКЦІЙ
     # -------------------------------------------------------------------------
     def on_params_changed(self):
         self.tau_m = self.sl_tau_m.value() / 1000.0
@@ -845,9 +958,11 @@ class NOESYStudioApp(QMainWindow):
 
         mol = self.molecules[idx]
         if len(mol.shifts) < 2:
-            self.ax_single.clear()
-            self.ax_single.text(0.5, 0.5, "Недостатньо даних для розрахунку.\nВведіть зсуви та геометрію на Вкладці 1.",
-                                color="#a0aec0", ha='center', va='center')
+            self.fig_single.clear()
+            ax = self.fig_single.add_subplot(111)
+            ax.set_facecolor("#16171d")
+            ax.text(0.5, 0.5, "Недостатньо даних для розрахунку.\nВведіть зсуви та геометрію на Вкладці 1.",
+                    color="#a0aec0", ha='center', va='center')
             self.canvas_single.draw()
             return
 
@@ -856,11 +971,8 @@ class NOESYStudioApp(QMainWindow):
             tau_m=self.tau_m, tau_c_ps=self.tau_c_ps, freq_mhz=self.freq_mhz
         )
 
-        # Таблиця
         self.populate_noesy_table(self.table_single_noesy, intensities, distances, mol.shifts, mol.labels)
-
-        # Побудова графіка
-        self.plot_spectrum_on_axis(self.ax_single, self.canvas_single, intensities, mol.shifts, mol.labels, mol.name)
+        self.plot_spectrum_with_projections(intensities, mol.shifts, mol.labels, mol.name)
 
     def populate_noesy_table(self, table_widget, intensities, distances, shifts, labels):
         N = len(shifts)
@@ -874,7 +986,7 @@ class NOESYStudioApp(QMainWindow):
                 if r < 3.8:
                     peaks.append((labels[i], labels[j], shifts[i], shifts[j], r, noe_pct))
 
-        peaks.sort(key=lambda x: x[4])  # сортування за найкоротшою відстанню r
+        peaks.sort(key=lambda x: x[4])
         table_widget.setRowCount(len(peaks))
 
         for row, (l1, l2, s1, s2, r, noe) in enumerate(peaks):
@@ -891,20 +1003,67 @@ class NOESYStudioApp(QMainWindow):
             table_widget.setItem(row, 2, it_r)
             table_widget.setItem(row, 3, it_noe)
 
-    def plot_spectrum_on_axis(self, ax, canvas, intensities, shifts, labels, title):
-        ax.clear()
-        ax.set_facecolor("#111216")
+    def plot_spectrum_with_projections(self, intensities, shifts, labels, title):
+        self.fig_single.clear()
 
         N = len(shifts)
-        if N < 2:
-            canvas.draw()
-            return
-
         ppm_min = max(0.0, np.min(shifts) - 0.5)
         ppm_max = np.max(shifts) + 0.5
 
-        grid_res = 260
+        grid_res = 280
         ppm_grid = np.linspace(ppm_min, ppm_max, grid_res)
+
+        # Розрахунок 1D симульованого спектра
+        spec_1d = np.zeros_like(ppm_grid)
+        for s in shifts:
+            spec_1d += np.exp(-4.0 * np.log(2) * ((ppm_grid - s) ** 2) / (self.fwhm ** 2))
+        max_1d = np.max(spec_1d) if np.max(spec_1d) > 0 else 1.0
+
+        show_projections = self.chk_show_1d.isChecked()
+
+        if show_projections:
+            # Створюємо GridSpec з осями: верхня 1D, ліва 1D, центральна 2D
+            gs = self.fig_single.add_gridspec(
+                2, 2,
+                width_ratios=[1.1, 5.5],
+                height_ratios=[1.1, 5.5],
+                wspace=0.03, hspace=0.03,
+                left=0.08, right=0.96, bottom=0.08, top=0.93
+            )
+
+            ax_empty = self.fig_single.add_subplot(gs[0, 0])
+            ax_empty.axis('off')
+
+            ax_top = self.fig_single.add_subplot(gs[0, 1])
+            ax_left = self.fig_single.add_subplot(gs[1, 0])
+            ax_main = self.fig_single.add_subplot(gs[1, 1], sharex=ax_top, sharey=ax_left)
+
+            # 1. Верхній 1D спектр (F2)
+            ax_top.set_facecolor("#16171d")
+            ax_top.plot(ppm_grid, spec_1d, color="#63b3ed", lw=1.2)
+            ax_top.fill_between(ppm_grid, 0, spec_1d, color="#3182ce", alpha=0.25)
+            ax_top.set_ylim(0, max_1d * 1.15)
+            ax_top.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+            ax_top.set_title(f"{title} (600 MHz, τₘ={int(self.tau_m * 1000)} ms)", color="#63b3ed", fontsize=11,
+                             fontweight='bold', pad=8)
+            for sp in ax_top.spines.values():
+                sp.set_color("#2d3748")
+
+            # 2. Лівий 1D спектр (F1 - повернутий)
+            ax_left.set_facecolor("#16171d")
+            ax_left.plot(spec_1d, ppm_grid, color="#63b3ed", lw=1.2)
+            ax_left.fill_betweenx(ppm_grid, 0, spec_1d, color="#3182ce", alpha=0.25)
+            ax_left.set_xlim(max_1d * 1.15, 0)  # спрямовуємо базову лінію вліво
+            ax_left.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+            for sp in ax_left.spines.values():
+                sp.set_color("#2d3748")
+        else:
+            ax_main = self.fig_single.add_subplot(111)
+            ax_main.set_title(f"{title} (600 MHz, τₘ={int(self.tau_m * 1000)} ms)", color="#63b3ed", fontsize=11,
+                              fontweight='bold')
+
+        # 3. Центральний 2D спектр
+        ax_main.set_facecolor("#111216")
         X, Y = np.meshgrid(ppm_grid, ppm_grid)
         Z = np.zeros_like(X)
 
@@ -924,11 +1083,12 @@ class NOESYStudioApp(QMainWindow):
             threshold = 0.008 if self.suppress_diag else 0.015
             levels = np.geomspace(max_val * threshold, max_val * 0.95, 16)
             try:
-                ax.contour(X, Y, Z_abs, levels=levels, cmap=self.cmap_name, linewidths=0.9)
+                ax_main.contour(X, Y, Z_abs, levels=levels, cmap=self.cmap_name, linewidths=0.9)
             except Exception:
                 pass
 
-        ax.plot([ppm_min, ppm_max], [ppm_min, ppm_max], color="#4a5568", linestyle="--", linewidth=0.8, alpha=0.7)
+        # Діагональ
+        ax_main.plot([ppm_min, ppm_max], [ppm_min, ppm_max], color="#4a5568", linestyle="--", linewidth=0.8, alpha=0.7)
 
         # Підписи унікальних зсувів
         unique_shifts = {}
@@ -939,20 +1099,18 @@ class NOESYStudioApp(QMainWindow):
             else:
                 unique_shifts[s_round] += f",{l}"
 
-        for s_round, l_combined in unique_shifts.items():
-            ax.text(s_round, s_round, f" {l_combined}", color="#cbd5e0", fontsize=7.5, verticalalignment='bottom')
+        for s_round, l_comb in unique_shifts.items():
+            ax_main.text(s_round, s_round, f" {l_comb}", color="#cbd5e0", fontsize=7.5, verticalalignment='bottom')
 
-        ax.set_xlim(ppm_max, ppm_min)
-        ax.set_ylim(ppm_max, ppm_min)
-        ax.set_xlabel("F2 [ppm]", color="#e2e8f0", fontsize=10)
-        ax.set_ylabel("F1 [ppm]", color="#e2e8f0", fontsize=10)
-        ax.set_title(f"{title} (600 MHz, τₘ={int(self.tau_m * 1000)} ms)", color="#63b3ed", fontsize=11,
-                     fontweight='bold')
-        ax.tick_params(colors="#a0aec0", labelsize=8)
-        for spine in ax.spines.values():
+        ax_main.set_xlim(ppm_max, ppm_min)
+        ax_main.set_ylim(ppm_max, ppm_min)
+        ax_main.set_xlabel("F2 (¹H) [ppm]", color="#e2e8f0", fontsize=10, labelpad=6)
+        ax_main.set_ylabel("F1 (¹H) [ppm]", color="#e2e8f0", fontsize=10, labelpad=6)
+        ax_main.tick_params(colors="#a0aec0", labelsize=8)
+        for spine in ax_main.spines.values():
             spine.set_color("#2d3748")
 
-        canvas.draw()
+        self.canvas_single.draw()
 
     # -------------------------------------------------------------------------
     # ВКЛАДКА 3: ПОРІВНЯННЯ ДВОХ МОЛЕКУЛ
@@ -967,19 +1125,15 @@ class NOESYStudioApp(QMainWindow):
         mol_a = self.molecules[idx_a]
         mol_b = self.molecules[idx_b]
 
-        # Розрахунок обох
         int_a, dist_a = calculate_noesy(mol_a.shifts, mol_a.coords, self.tau_m, self.tau_c_ps, self.freq_mhz)
         int_b, dist_b = calculate_noesy(mol_b.shifts, mol_b.coords, self.tau_m, self.tau_c_ps, self.freq_mhz)
 
-        # Малювання графіків поруч
-        self.plot_spectrum_on_axis(self.ax_cmp_a, self.canvas_cmp_a, int_a, mol_a.shifts, mol_a.labels,
-                                   f"Мол А: {mol_a.name}")
-        self.plot_spectrum_on_axis(self.ax_cmp_b, self.canvas_cmp_b, int_b, mol_b.shifts, mol_b.labels,
-                                   f"Мол Б: {mol_b.name}")
+        self.plot_spectrum_simple(self.ax_cmp_a, self.canvas_cmp_a, int_a, mol_a.shifts, mol_a.labels,
+                                  f"Мол А: {mol_a.name}")
+        self.plot_spectrum_simple(self.ax_cmp_b, self.canvas_cmp_b, int_b, mol_b.shifts, mol_b.labels,
+                                  f"Мол Б: {mol_b.name}")
 
-        # Побудова таблиці різниць відстаней
         diff_list = []
-        # Зіставляємо за назвами міток
         dict_a = {}
         for i in range(len(mol_a.labels)):
             for j in range(i + 1, len(mol_a.labels)):
@@ -997,7 +1151,7 @@ class NOESYStudioApp(QMainWindow):
             r_a = dict_a[p]
             r_b = dict_b[p]
             delta_r = abs(r_a - r_b)
-            if delta_r >= 0.7:  # Значна різниця у просторовій відстані
+            if delta_r >= 0.7:
                 diff_list.append((f"{p[0]} — {p[1]}", r_a, r_b, delta_r))
 
         diff_list.sort(key=lambda x: x[3], reverse=True)
@@ -1030,12 +1184,61 @@ class NOESYStudioApp(QMainWindow):
             self.table_diff.setItem(row, 3, it_dra)
             self.table_diff.setItem(row, 4, it_conc)
 
+    def plot_spectrum_simple(self, ax, canvas, intensities, shifts, labels, title):
+        ax.clear()
+        ax.set_facecolor("#111216")
+
+        N = len(shifts)
+        if N < 2:
+            canvas.draw()
+            return
+
+        ppm_min = max(0.0, np.min(shifts) - 0.5)
+        ppm_max = np.max(shifts) + 0.5
+
+        grid_res = 220
+        ppm_grid = np.linspace(ppm_min, ppm_max, grid_res)
+        X, Y = np.meshgrid(ppm_grid, ppm_grid)
+        Z = np.zeros_like(X)
+
+        for i in range(N):
+            for j in range(N):
+                amp = intensities[i, j]
+                if i == j and self.suppress_diag:
+                    amp = 0.0
+
+                Z += amp * np.exp(-4.0 * np.log(2) * (
+                        ((X - shifts[i]) ** 2 + (Y - shifts[j]) ** 2) / (self.fwhm ** 2)
+                ))
+
+        Z_abs = np.abs(Z)
+        max_val = np.max(Z_abs)
+        if max_val > 0:
+            threshold = 0.008 if self.suppress_diag else 0.015
+            levels = np.geomspace(max_val * threshold, max_val * 0.95, 14)
+            try:
+                ax.contour(X, Y, Z_abs, levels=levels, cmap=self.cmap_name, linewidths=0.8)
+            except Exception:
+                pass
+
+        ax.plot([ppm_min, ppm_max], [ppm_min, ppm_max], color="#4a5568", linestyle="--", linewidth=0.8, alpha=0.7)
+        ax.set_xlim(ppm_max, ppm_min)
+        ax.set_ylim(ppm_max, ppm_min)
+        ax.set_xlabel("F2 [ppm]", color="#e2e8f0", fontsize=9)
+        ax.set_ylabel("F1 [ppm]", color="#e2e8f0", fontsize=9)
+        ax.set_title(title, color="#63b3ed", fontsize=10, fontweight='bold')
+        ax.tick_params(colors="#a0aec0", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color("#2d3748")
+
+        canvas.draw()
+
 
 # -----------------------------------------------------------------------------
 # ЗАПУСК
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = NOESYStudioApp()
+    window = NOESYStudioPro()
     window.show()
     sys.exit(app.exec() if hasattr(app, 'exec') else app.exec_())
